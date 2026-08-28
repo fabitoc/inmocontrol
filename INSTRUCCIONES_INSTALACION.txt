@@ -1,0 +1,26 @@
+===================================================================
+      INMOCONTROL - SILVACOOPERATIVA | GUÍA DE USO
+===================================================================
+
+¡APLICACIÓN DE ESCRITORIO WINDOWS NATIVA (.EXE)!
+
+OPCIÓN 1: Ejecutable Directo (Recomendado ⭐)
+-------------------------------------------------------------------
+Haga DOBLE CLIC directamente en:
+👉 InmoControl.exe
+
+- Abre una ventana de aplicación nativa e independiente.
+- No requiere instalar Node.js ni configurar terminales.
+- Guarda todos los datos automáticamente en la carpeta "data/database.json".
+
+-------------------------------------------------------------------
+OPCIÓN 2: Modo Navegador Web
+-------------------------------------------------------------------
+Si prefiere usarlo en Google Chrome o Microsoft Edge:
+👉 INICIAR_INMOCONTROL.bat
+
+===================================================================
+Para respaldar sus datos:
+Simplemente copie el archivo "data/database.json" o use el botón
+"Exportar Backup" en la pestaña Configuración de la aplicación.
+===================================================================
