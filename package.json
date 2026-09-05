@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:desktop": "npm run build && dotnet publish desktop/desktop.csproj -c Release && powershell -Command \"Copy-Item desktop/bin/Release/net10.0-windows/win-x64/publish/InmoControl.exe . -Force\"",
     "preview": "vite preview"
   },
   "dependencies": {

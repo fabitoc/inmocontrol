@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Threading.Tasks;
@@ -47,7 +48,7 @@ namespace InmoControl
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             
-            // Check local dist locations
+            // Check local dist locations (development or existing portable directory)
             string[] possibleDistPaths = new[]
             {
                 Path.Combine(baseDir, "dist"),
@@ -57,17 +58,11 @@ namespace InmoControl
 
             foreach (var p in possibleDistPaths)
             {
-                if (Directory.Exists(p))
+                if (Directory.Exists(p) && File.Exists(Path.Combine(p, "index.html")))
                 {
                     distPath = Path.GetFullPath(p);
                     break;
                 }
-            }
-
-            if (string.IsNullOrEmpty(distPath))
-            {
-                distPath = Path.Combine(baseDir, "dist");
-                Directory.CreateDirectory(distPath);
             }
 
             // Data directory
@@ -99,6 +94,67 @@ namespace InmoControl
             {
                 string initialDb = "{\n  \"arrendadores\": [],\n  \"propiedades\": [],\n  \"arrendatarios\": [],\n  \"transacciones\": [],\n  \"mantenimientos\": [],\n  \"recibos_pago\": []\n}";
                 File.WriteAllText(dbFilePath, initialDb, Encoding.UTF8);
+            }
+
+            // Embedded frontend fallback:
+            // If dist/index.html was not found on disk, unpack embedded dist.zip into dataPath/dist
+            if (string.IsNullOrEmpty(distPath) || !File.Exists(Path.Combine(distPath, "index.html")))
+            {
+                distPath = Path.Combine(dataPath, "dist");
+                ExtractEmbeddedDist(distPath);
+            }
+
+            if (!File.Exists(Path.Combine(distPath, "index.html")))
+            {
+                MessageBox.Show(
+                    "No se pudo encontrar ni extraer la interfaz web del sistema (dist/index.html).\nVerifique la integridad del ejecutable.",
+                    "InmoControl - Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+        }
+
+        private void ExtractEmbeddedDist(string targetDir)
+        {
+            try
+            {
+                Directory.CreateDirectory(targetDir);
+                using var stream = typeof(Form1).Assembly.GetManifestResourceStream("dist.zip");
+                if (stream != null)
+                {
+                    using var archive = new ZipArchive(stream);
+                    foreach (var entry in archive.Entries)
+                    {
+                        if (string.IsNullOrEmpty(entry.Name))
+                        {
+                            Directory.CreateDirectory(Path.Combine(targetDir, entry.FullName));
+                            continue;
+                        }
+
+                        string destinationPath = Path.Combine(targetDir, entry.FullName);
+                        string? dir = Path.GetDirectoryName(destinationPath);
+                        if (!string.IsNullOrEmpty(dir))
+                        {
+                            Directory.CreateDirectory(dir);
+                        }
+
+                        try
+                        {
+                            entry.ExtractToFile(destinationPath, overwrite: true);
+                        }
+                        catch
+                        {
+                            if (!File.Exists(destinationPath)) throw;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!File.Exists(Path.Combine(targetDir, "index.html")))
+                {
+                    MessageBox.Show($"Error al desempaquetar la interfaz del sistema: {ex.Message}", "InmoControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
         }
 
