@@ -1,0 +1,20 @@
+[package]
+name = "inmo-control-v2"
+version = "2.0.0"
+description = "InmoControl 2.0 - Local-First Real Estate Administration ERP Core Engine"
+authors = ["InmoControl Engineering"]
+edition = "2021"
+
+[lib]
+name = "inmo_control_core"
+path = "src/lib.rs"
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+
+[dev-dependencies]
+tempfile = "3.10"

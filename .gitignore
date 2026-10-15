@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Rust / Tauri build artifacts
+src-tauri/target/
+
+# SQLite databases and WAL files
+*.db
+*.db-wal
+*.db-shm
+
+# Environment variables and local logs
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db

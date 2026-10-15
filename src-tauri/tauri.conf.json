@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "InmoControl 2.0",
+  "version": "2.0.0",
+  "identifier": "com.inmocontrol.erp.v2",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "INMOCONTROL v2.0 // ERP DE TELEMETRÍA LOCAL",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1200,
+        "minHeight": 768,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}
