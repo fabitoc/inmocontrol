@@ -1,0 +1,15 @@
+schema: spec-driven
+
+context: |
+  Tech stack: React 18.3 + TypeScript + Tailwind CSS v3 + Tauri v2 (Rust) + SQLite WAL
+  Architecture: Local-First Desktop ERP with Obsidian Telemetry HUD and 5 separated PRD views
+  Testing: Vitest + React Testing Library (`npm test -- --run`) and Rust `cargo test`
+  Style: Obsidian Telemetry HUD #121317 / #0d0e12, Cyan #00eefc, Amber #ffb800, Magenta #ff007f, Matrix Green #00FF66, WCAG 2.1 AA #9ca3af muted text
+
+rules:
+  apply:
+    tdd: true
+    test_command: "npm test -- --run"
+  verify:
+    test_command: "npm test -- --run"
+    build_command: "npm run build"
