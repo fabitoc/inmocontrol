@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-[#121317] text-[#e3e2e7] font-body antialiased selection:bg-[#00eefc] selection:text-[#0d0e12];
+    margin: 0;
+  }
+
+  /* WCAG 2.1 AA high-visibility keyboard focus indicator (#00f0ff on #0d0e12) */
+  :focus-visible {
+    outline: 2px solid #00f0ff !important;
+    outline-offset: 2px !important;
+  }
+}
+
+/* Obsidian Telemetry HUD custom scanlines and industrial scrollbar */
+.scanline-overlay {
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0) 50%,
+    rgba(0, 238, 252, 0.025) 50%,
+    rgba(0, 238, 252, 0.025)
+  );
+  background-size: 100% 4px;
+}
+
+.hazard-stripes {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 0, 85, 0.14),
+    rgba(255, 0, 85, 0.14) 10px,
+    rgba(13, 14, 18, 0.9) 10px,
+    rgba(13, 14, 18, 0.9) 20px
+  );
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0d0e12;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #292a2e;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00eefc;
+}

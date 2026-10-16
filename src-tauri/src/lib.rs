@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod commands;
 pub mod db;
 pub mod models;
 pub mod paths;
