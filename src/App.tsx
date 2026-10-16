@@ -100,9 +100,9 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#121317] text-[#e3e2e7] flex flex-col scanline-overlay">
+    <div className="h-screen overflow-hidden bg-[#121317] text-[#e3e2e7] flex flex-col scanline-overlay">
       {/* Top Desktop OS Telemetry Bar */}
-      <div className="bg-[#0d0e12] border-b border-[#292a2e] px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#9ca3af]">
+      <div className="shrink-0 bg-[#0d0e12] border-b border-[#292a2e] px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#9ca3af]">
         <div className="flex items-center gap-3">
           <span className="text-[#00eefc] font-bold">
             INMOCONTROL 2.0 // DESKTOP ERP
@@ -128,11 +128,11 @@ export const App: React.FC = () => {
       </div>
 
       {/* Main Application Frame: Left Sidebar + Right Workspace */}
-      <div className="flex-1 flex flex-col lg:flex-row">
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
         {/* Left Navigation Sidebar with the 5 Separated PRD Views */}
         <aside
           aria-label="Navegación Principal de Módulos"
-          className="w-full lg:w-64 bg-[#0d0e12] border-b lg:border-b-0 lg:border-r border-[#292a2e] p-4 flex flex-col justify-between"
+          className="w-full lg:w-64 shrink-0 bg-[#0d0e12] border-b lg:border-b-0 lg:border-r border-[#292a2e] p-4 flex flex-col justify-between overflow-y-auto"
         >
           <div className="space-y-4">
             <div className="border-b border-[#292a2e] pb-3">
@@ -183,9 +183,9 @@ export const App: React.FC = () => {
         </aside>
 
         {/* Right Workspace: Global Master Owner Selector Header + Active View */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
           {/* Header with Global Master Owner Selector */}
-          <header className="bg-[#0d0e12] border-b border-[#292a2e] px-6 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <header className="shrink-0 bg-[#0d0e12] border-b border-[#292a2e] px-6 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
               <span className="text-[11px] font-mono text-[#9ca3af] uppercase tracking-widest block">
                 FILTRO MAESTRO REACTIVO (&lt;300ms) // ESTADO GLOBAL SINCRONIZADO
@@ -226,7 +226,7 @@ export const App: React.FC = () => {
           </header>
 
           {/* Active Module Content Canvas */}
-          <main className="flex-1 p-6 overflow-y-auto">
+          <main className="flex-1 min-h-0 p-6 overflow-y-auto">
             {activeModule === 'dashboard-analitico' && (
               <DashboardAnaliticoView
                 bundle={bundle}
