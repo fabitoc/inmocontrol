@@ -10,7 +10,7 @@ All specifications in `openspec/specs/core-erp/spec.md` and tasks in `openspec/c
 
 | Check | Command | Result | Status |
 |-------|---------|--------|--------|
-| Unit & Integration Test Suite | `npm test -- --run` | `1 test file, 5/5 tests passed` | **PASS** |
+| Unit & Integration Test Suite | `npm test -- --run` | `1 test file, 12/12 tests passed` | **PASS** |
 | Production TypeScript + Vite Build | `npm run build` | `tsc && vite build succeeded (dist/ generated cleanly)` | **PASS** |
 
 ### Tested Requirements Breakdown (`npm test -- --run`)

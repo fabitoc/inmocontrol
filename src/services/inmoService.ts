@@ -23,6 +23,13 @@ export interface CommissionBreakdown {
 
 export interface SettlementPreviewLine {
   property: Property;
+  ownerSharePct: number;
+  agreedRentCop: number;
+  remainingBalanceCop: number;
+  isPartialPayment: boolean;
+  abonosCount: number;
+  paymentsBreakdown: RentPayment[];
+  propertyGrossCollectedCop: number;
   grossCollectedCop: number;
   percentageFeeCop: number;
   fixedFeeCop: number;
@@ -49,6 +56,33 @@ export interface AgencyParticipationResult {
   ownerBaseRentCop: number;
   agencyBaseRentCop: number;
   participationByVolumePct: number;
+}
+
+/**
+ * Resolves the ownership participation percentage (`0` to `100`) of `ownerId` for a given property.
+ * - When `property.co_owners` is populated, returns the matching co-owner's `share_pct`
+ *   (or the remaining share for `property.owner_id` if only secondary co-owners were listed).
+ * - Otherwise, returns `100` when `property.owner_id === ownerId`, or `0`.
+ */
+export function getOwnerSharePct(property: Property, ownerId: number): number {
+  if (property.co_owners && property.co_owners.length > 0) {
+    const found = property.co_owners.find((co) => co.owner_id === ownerId);
+    if (found) {
+      return found.share_pct;
+    }
+    if (
+      property.owner_id === ownerId &&
+      !property.co_owners.some((co) => co.owner_id === property.owner_id)
+    ) {
+      const secondaryTotal = property.co_owners.reduce(
+        (sum, co) => sum + Number(co.share_pct || 0),
+        0
+      );
+      return Math.max(0, 100 - secondaryTotal);
+    }
+    return 0;
+  }
+  return property.owner_id === ownerId ? 100 : 0;
 }
 
 /**
@@ -105,62 +139,94 @@ export function computeSettlementSeal(
 /**
  * Core Business Rule 1 & 2:
  * Computes the complete monthly owner settlement preview:
- * - Crosses all `PAGADO` rent payments for the owner's properties in `periodMonth`.
- * - Subtracts mixed agency commission `(Gross * %) + Fixed Fee` for each collected property.
- * - Deducts 1:1 net cost (`net_cost_cop`) of all `'Por Liquidar'` maintenance expenses with zero markup.
+ * - Crosses all `PAGADO` rent payments for the owner's properties in `periodMonth`, prorated by co-ownership share (`share_pct`).
+ * - Subtracts strictly percentage-based agency commission (`Gross * %`) without any fixed base fee.
+ * - Deducts 1:1 net cost (`net_cost_cop`) of all `'Por Liquidar'` maintenance expenses prorated by co-ownership share.
  */
 export function calculateOwnerSettlementPreview(
   ownerId: number,
   properties: Property[],
   payments: RentPayment[],
   maintenances: MaintenanceExpense[],
-  periodMonth: string
+  periodMonth: string,
+  contracts: TenantContract[] = []
 ): OwnerSettlementPreview {
   const lines: SettlementPreviewLine[] = [];
   let grossIncomeCop = 0;
   let commissionAmountCop = 0;
-  let fixedFeeAmountCop = 0;
+  const fixedFeeAmountCop = 0;
+
+  const propById = new Map(properties.map((p) => [p.id, p]));
 
   for (const prop of properties) {
-    const paidForProp = payments
+    const sharePct = getOwnerSharePct(prop, ownerId);
+    if (sharePct <= 0) continue;
+
+    const propPayments = payments
       .filter(
         (rp) =>
           rp.property_id === prop.id &&
           rp.period_month === periodMonth &&
           rp.status === 'PAGADO'
       )
-      .reduce((sum, rp) => sum + rp.gross_amount_cop, 0);
+      .sort((a, b) => a.id - b.id);
+
+    const paidForProp = propPayments.reduce(
+      (sum, rp) => sum + rp.gross_amount_cop,
+      0
+    );
 
     if (paidForProp > 0) {
+      const activeContract =
+        contracts.find(
+          (c) => c.property_id === prop.id && c.status !== 'FINALIZADO'
+        ) ?? contracts.find((c) => c.property_id === prop.id);
+      const agreedRentCop =
+        activeContract && activeContract.monthly_rent_cop > 0
+          ? activeContract.monthly_rent_cop
+          : prop.base_rent_cop;
+      const remainingBalanceCop = Math.max(0, agreedRentCop - paidForProp);
+      const isPartialPayment = agreedRentCop > 0 && paidForProp < agreedRentCop;
+
+      const ownerGrossCop = Math.round(paidForProp * (sharePct / 100));
       const breakdown = calculatePropertyCommission(
-        paidForProp,
+        ownerGrossCop,
         prop.commission_pct,
-        prop.fixed_fee_cop
+        0
       );
-      grossIncomeCop += paidForProp;
+      grossIncomeCop += ownerGrossCop;
       commissionAmountCop += breakdown.percentageFeeCop;
-      fixedFeeAmountCop += breakdown.fixedFeeCop;
 
       lines.push({
         property: prop,
-        grossCollectedCop: paidForProp,
+        ownerSharePct: sharePct,
+        agreedRentCop,
+        remainingBalanceCop,
+        isPartialPayment,
+        abonosCount: propPayments.length,
+        paymentsBreakdown: propPayments,
+        propertyGrossCollectedCop: paidForProp,
+        grossCollectedCop: ownerGrossCop,
         percentageFeeCop: breakdown.percentageFeeCop,
-        fixedFeeCop: breakdown.fixedFeeCop,
-        totalAgencyFeeCop: breakdown.totalCommissionCop,
+        fixedFeeCop: 0,
+        totalAgencyFeeCop: breakdown.percentageFeeCop,
       });
     }
   }
 
   const pendingMaintenances = maintenances.filter(
-    (m) => m.deduction_status === 'Por Liquidar'
+    (m) =>
+      m.deduction_status === 'Por Liquidar' &&
+      !m.settled_owner_ids?.includes(ownerId)
   );
-  // 1:1 net cost deduction without agency operational markup
-  const maintenanceDeductionCop = pendingMaintenances.reduce(
-    (sum, m) => sum + m.net_cost_cop,
-    0
-  );
+  // 1:1 net cost deduction prorated by owner's co-ownership share without agency operational markup
+  const maintenanceDeductionCop = pendingMaintenances.reduce((sum, m) => {
+    const prop = propById.get(m.property_id);
+    const sharePct = prop ? getOwnerSharePct(prop, ownerId) : 100;
+    return sum + Math.round(m.net_cost_cop * (sharePct / 100));
+  }, 0);
 
-  const totalAgencyFeeCop = commissionAmountCop + fixedFeeAmountCop;
+  const totalAgencyFeeCop = commissionAmountCop;
   const netPayableCop =
     grossIncomeCop - totalAgencyFeeCop - maintenanceDeductionCop;
 
@@ -169,7 +235,7 @@ export function calculateOwnerSettlementPreview(
     periodMonth,
     grossIncomeCop,
     commissionAmountCop,
-    fixedFeeAmountCop,
+    0,
     maintenanceDeductionCop,
     netPayableCop
   );
@@ -198,7 +264,9 @@ export function calculateAgencyParticipation(
   const rentableAll = allProperties.filter(
     (p) => p.property_type !== 'EDIFICIO MATRIZ'
   );
-  const rentableOwner = rentableAll.filter((p) => p.owner_id === ownerId);
+  const rentableOwner = rentableAll.filter(
+    (p) => getOwnerSharePct(p, ownerId) > 0
+  );
 
   const agencyRentableCount = rentableAll.length;
   const ownerRentableCount = rentableOwner.length;
@@ -213,7 +281,8 @@ export function calculateAgencyParticipation(
     0
   );
   const ownerBaseRentCop = rentableOwner.reduce(
-    (sum, p) => sum + p.base_rent_cop,
+    (sum, p) =>
+      sum + Math.round(p.base_rent_cop * (getOwnerSharePct(p, ownerId) / 100)),
     0
   );
 
@@ -241,6 +310,145 @@ export function formatCop(amountCop: number): string {
   return `${sign}$${abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}`;
 }
 
+function convertUnderThousandToSpanishWords(n: number): string {
+  if (n === 0) return '';
+  if (n === 100) return 'cien';
+
+  const hundreds = [
+    '',
+    'ciento',
+    'doscientos',
+    'trescientos',
+    'cuatrocientos',
+    'quinientos',
+    'seiscientos',
+    'setecientos',
+    'ochocientos',
+    'novecientos',
+  ];
+
+  const underThirty = [
+    '',
+    'un',
+    'dos',
+    'tres',
+    'cuatro',
+    'cinco',
+    'seis',
+    'siete',
+    'ocho',
+    'nueve',
+    'diez',
+    'once',
+    'doce',
+    'trece',
+    'catorce',
+    'quince',
+    'dieciséis',
+    'diecisiete',
+    'dieciocho',
+    'diecinueve',
+    'veinte',
+    'veintiún',
+    'veintidós',
+    'veintitrés',
+    'veinticuatro',
+    'veinticinco',
+    'veintiséis',
+    'veintisiete',
+    'veintiocho',
+    'veintinueve',
+  ];
+
+  const tens = [
+    '',
+    '',
+    '',
+    'treinta',
+    'cuarenta',
+    'cincuenta',
+    'sesenta',
+    'setenta',
+    'ochenta',
+    'noventa',
+  ];
+
+  const h = Math.floor(n / 100);
+  const rem = n % 100;
+  const parts: string[] = [];
+
+  if (h > 0) {
+    parts.push(hundreds[h]);
+  }
+
+  if (rem > 0) {
+    if (rem < 30) {
+      parts.push(underThirty[rem]);
+    } else {
+      const t = Math.floor(rem / 10);
+      const u = rem % 10;
+      parts.push(u === 0 ? tens[t] : `${tens[t]} y ${underThirty[u]}`);
+    }
+  }
+
+  return parts.join(' ');
+}
+
+/**
+ * Converts a numeric COP amount into Spanish currency text (e.g., 2000 -> "Dos mil pesos").
+ */
+export function formatCopInWords(amountCop: number): string {
+  const safe = Math.max(0, Math.floor(Number(amountCop) || 0));
+  if (safe === 0) return 'Cero pesos';
+  if (safe === 1) return 'Un peso';
+
+  const billions = Math.floor(safe / 1_000_000_000);
+  const millions = Math.floor((safe % 1_000_000_000) / 1_000_000);
+  const thousands = Math.floor((safe % 1_000_000) / 1_000);
+  const units = safe % 1_000;
+
+  const chunks: string[] = [];
+
+  if (billions > 0) {
+    chunks.push(
+      billions === 1
+        ? 'mil'
+        : `${convertUnderThousandToSpanishWords(billions)} mil`
+    );
+    if (millions === 0) {
+      chunks.push('millones');
+    }
+  }
+
+  if (millions > 0) {
+    if (millions === 1 && billions === 0) {
+      chunks.push('un millón');
+    } else {
+      chunks.push(`${convertUnderThousandToSpanishWords(millions)} millones`);
+    }
+  }
+
+  if (thousands > 0) {
+    chunks.push(
+      thousands === 1
+        ? 'mil'
+        : `${convertUnderThousandToSpanishWords(thousands)} mil`
+    );
+  }
+
+  if (units > 0) {
+    chunks.push(convertUnderThousandToSpanishWords(units));
+  }
+
+  const suffix =
+    (billions > 0 || millions > 0) && thousands === 0 && units === 0
+      ? 'de pesos'
+      : 'pesos';
+
+  const phrase = `${chunks.join(' ')} ${suffix}`.trim();
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+}
+
 /**
  * Normalizes a local file selection into `%LocalAppData%\InmoControl\evidencias\<sanitized_name>`.
  */
@@ -252,6 +460,223 @@ export function normalizeEvidencePath(rawFilename: string): string {
   const baseName = trimmed.split(/[/\\]/).pop() || trimmed;
   const sanitized = baseName.replace(/[^a-zA-Z0-9._-]/g, '_');
   return `evidencias/${sanitized}`;
+}
+
+const SPANISH_MONTH_NAMES: Record<string, string> = {
+  '01': 'Enero',
+  '02': 'Febrero',
+  '03': 'Marzo',
+  '04': 'Abril',
+  '05': 'Mayo',
+  '06': 'Junio',
+  '07': 'Julio',
+  '08': 'Agosto',
+  '09': 'Septiembre',
+  '10': 'Octubre',
+  '11': 'Noviembre',
+  '12': 'Diciembre',
+};
+
+/**
+ * Returns the current accounting period in `YYYY-MM` format based on the local system clock.
+ */
+export function getCurrentPeriodMonth(now: Date = new Date()): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+/**
+ * Formats a `YYYY-MM` period string into a human-readable Spanish label (e.g., `2026-11 (Noviembre 2026 — Mes Actual)`).
+ */
+export function formatPeriodMonthLabel(
+  periodMonth: string,
+  currentPeriod: string = getCurrentPeriodMonth()
+): string {
+  const [year, month] = periodMonth.split('-');
+  const monthName = SPANISH_MONTH_NAMES[month] ?? month;
+  const suffix = periodMonth === currentPeriod ? ' — Mes Actual' : '';
+  return `${periodMonth} (${monthName} ${year}${suffix})`;
+}
+
+/**
+ * Builds a sorted list (newest first) of accounting periods (`YYYY-MM`), always including
+ * the current month (`getCurrentPeriodMonth()`), recent rolling months, and any period
+ * referenced by existing payments or settlements.
+ */
+export function getAccountingPeriodOptions(
+  payments: RentPayment[] = [],
+  settlements: Settlement[] = [],
+  now: Date = new Date()
+): string[] {
+  const currentPeriod = getCurrentPeriodMonth(now);
+  const periods = new Set<string>([
+    currentPeriod,
+    '2026-11',
+    '2026-10',
+    '2026-09',
+    '2026-08',
+  ]);
+
+  const baseYear = now.getFullYear();
+  const baseMonth = now.getMonth() + 1;
+  for (let offset = -3; offset <= 0; offset++) {
+    const d = new Date(baseYear, baseMonth - 1 + offset, 1);
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (ym <= currentPeriod) {
+      periods.add(ym);
+    }
+  }
+
+  for (const rp of payments) {
+    if (rp.period_month && rp.period_month <= currentPeriod) {
+      periods.add(rp.period_month);
+    }
+  }
+  for (const s of settlements) {
+    if (s.period_month && s.period_month <= currentPeriod) {
+      periods.add(s.period_month);
+    }
+  }
+
+  return Array.from(periods).sort((a, b) => b.localeCompare(a));
+}
+
+export interface ContractBillingCycleState {
+  registrationDate: string;
+  registrationPeriod: string;
+  cutoffDay: number;
+  activePeriod: string;
+  collectiblePeriods: string[];
+  nextPeriod: string;
+  nextCutoffDate: string;
+}
+
+/**
+ * Resolves the active collectible period(s) for a specific property/contract in `04 // Registro de Recaudo Mensual`:
+ * - Strictly forbids charging any period prior to the tenant's registration date (`contract.start_date`).
+ * - Strictly forbids selecting any future period that has not arrived yet (`> getCurrentPeriodMonth()`).
+ * - Automatically activates the current billing period according to the contract's cutoff date (`cutoff_day`).
+ */
+export function getContractBillingCycleState(
+  propertyId: number,
+  properties: Property[],
+  contracts: TenantContract[],
+  payments: RentPayment[],
+  now: Date = new Date()
+): ContractBillingCycleState {
+  const currentPeriod = getCurrentPeriodMonth(now);
+  const prop = properties.find((p) => p.id === propertyId);
+  const contract =
+    contracts.find(
+      (c) => c.property_id === propertyId && c.status !== 'FINALIZADO'
+    ) ?? contracts.find((c) => c.property_id === propertyId);
+
+  const rawStartDate =
+    contract?.start_date?.slice(0, 10) || `${currentPeriod}-01`;
+  const rawRegPeriod = rawStartDate.slice(0, 7);
+  const registrationPeriod =
+    rawRegPeriod > currentPeriod ? currentPeriod : rawRegPeriod;
+  const cutoffDay = contract?.cutoff_day ?? prop?.cutoff_day ?? 5;
+
+  const validPeriods = new Set<string>([currentPeriod]);
+
+  for (const rp of payments) {
+    if (rp.property_id !== propertyId) continue;
+    const p = rp.period_month;
+    if (!p || p < registrationPeriod || p > currentPeriod) continue;
+
+    const status = getPeriodCollectionStatus(
+      propertyId,
+      p,
+      properties,
+      contracts,
+      payments,
+      contract?.id
+    );
+    if (
+      rp.status === 'MORA' ||
+      rp.status === 'PENDIENTE' ||
+      status.remainingBalanceCop > 0
+    ) {
+      validPeriods.add(p);
+    }
+  }
+
+  const collectiblePeriods = Array.from(validPeriods)
+    .filter((p) => p >= registrationPeriod && p <= currentPeriod)
+    .sort((a, b) => b.localeCompare(a));
+
+  const activePeriod = collectiblePeriods[0] ?? currentPeriod;
+
+  const [currYear, currMonth] = currentPeriod.split('-').map(Number);
+  const nextDateObj = new Date(currYear, currMonth, 1);
+  const nextPeriod = `${nextDateObj.getFullYear()}-${String(nextDateObj.getMonth() + 1).padStart(2, '0')}`;
+  const nextCutoffDate = `${nextPeriod}-${String(cutoffDay).padStart(2, '0')}`;
+
+  return {
+    registrationDate: rawStartDate,
+    registrationPeriod,
+    cutoffDay,
+    activePeriod,
+    collectiblePeriods:
+      collectiblePeriods.length > 0 ? collectiblePeriods : [currentPeriod],
+    nextPeriod,
+    nextCutoffDate,
+  };
+}
+
+export interface PeriodCollectionStatus {
+  agreedRentCop: number;
+  alreadyCollectedCop: number;
+  remainingBalanceCop: number;
+  isFullyPaid: boolean;
+}
+
+/**
+ * Computes the agreed rent (`agreedRentCop`), cumulative `PAGADO` payments (`alreadyCollectedCop`),
+ * and maximum remaining balance (`remainingBalanceCop`) for a property/contract in a given `periodMonth`.
+ */
+export function getPeriodCollectionStatus(
+  propertyId: number,
+  periodMonth: string,
+  properties: Property[],
+  contracts: TenantContract[],
+  payments: RentPayment[],
+  contractId?: number
+): PeriodCollectionStatus {
+  const prop = properties.find((p) => p.id === propertyId);
+  const contract =
+    (contractId
+      ? contracts.find((c) => c.id === contractId)
+      : undefined) ??
+    contracts.find(
+      (c) => c.property_id === propertyId && c.status !== 'FINALIZADO'
+    ) ??
+    contracts.find((c) => c.property_id === propertyId);
+
+  const agreedRentCop =
+    contract && contract.monthly_rent_cop > 0
+      ? contract.monthly_rent_cop
+      : prop?.base_rent_cop ?? 0;
+
+  const alreadyCollectedCop = payments
+    .filter(
+      (rp) =>
+        rp.property_id === propertyId &&
+        rp.period_month === periodMonth &&
+        rp.status === 'PAGADO'
+    )
+    .reduce((sum, rp) => sum + rp.gross_amount_cop, 0);
+
+  const remainingBalanceCop = Math.max(0, agreedRentCop - alreadyCollectedCop);
+
+  return {
+    agreedRentCop,
+    alreadyCollectedCop,
+    remainingBalanceCop,
+    isFullyPaid: agreedRentCop > 0 && remainingBalanceCop === 0,
+  };
 }
 
 /**
@@ -420,7 +845,7 @@ function createInitialSeedState(): LocalDatabaseState {
       property_type: 'APARTAMENTO',
       base_rent_cop: 1_500_000,
       commission_pct: 8.0,
-      fixed_fee_cop: 45_000,
+      fixed_fee_cop: 0,
       cutoff_day: 5,
       status: 'OCUPADO',
       created_at: '2026-01-15T08:10:00Z',
@@ -435,7 +860,7 @@ function createInitialSeedState(): LocalDatabaseState {
       property_type: 'APARTAMENTO',
       base_rent_cop: 1_450_000,
       commission_pct: 8.0,
-      fixed_fee_cop: 45_000,
+      fixed_fee_cop: 0,
       cutoff_day: 5,
       status: 'DISPONIBLE',
       created_at: '2026-01-15T08:20:00Z',
@@ -450,7 +875,7 @@ function createInitialSeedState(): LocalDatabaseState {
       property_type: 'LOCAL COMERCIAL',
       base_rent_cop: 2_800_000,
       commission_pct: 10.0,
-      fixed_fee_cop: 60_000,
+      fixed_fee_cop: 0,
       cutoff_day: 5,
       status: 'OCUPADO',
       created_at: '2026-01-15T08:30:00Z',
@@ -465,7 +890,7 @@ function createInitialSeedState(): LocalDatabaseState {
       property_type: 'BODEGA',
       base_rent_cop: 4_200_000,
       commission_pct: 8.0,
-      fixed_fee_cop: 85_000,
+      fixed_fee_cop: 0,
       cutoff_day: 10,
       status: 'OCUPADO',
       created_at: '2026-01-18T11:00:00Z',
@@ -495,7 +920,7 @@ function createInitialSeedState(): LocalDatabaseState {
       property_type: 'OFICINA',
       base_rent_cop: 3_600_000,
       commission_pct: 9.0,
-      fixed_fee_cop: 70_000,
+      fixed_fee_cop: 0,
       cutoff_day: 5,
       status: 'OCUPADO',
       created_at: '2026-01-20T09:15:00Z',
@@ -510,7 +935,7 @@ function createInitialSeedState(): LocalDatabaseState {
       property_type: 'OFICINA',
       base_rent_cop: 3_200_000,
       commission_pct: 9.0,
-      fixed_fee_cop: 70_000,
+      fixed_fee_cop: 0,
       cutoff_day: 5,
       status: 'OCUPADO',
       created_at: '2026-01-20T09:20:00Z',
@@ -525,7 +950,7 @@ function createInitialSeedState(): LocalDatabaseState {
       property_type: 'APARTAMENTO',
       base_rent_cop: 4_100_000,
       commission_pct: 8.5,
-      fixed_fee_cop: 50_000,
+      fixed_fee_cop: 0,
       cutoff_day: 5,
       status: 'OCUPADO',
       created_at: '2026-02-05T10:00:00Z',
@@ -763,20 +1188,159 @@ function createInitialSeedState(): LocalDatabaseState {
       period_month: '2026-09',
       gross_income_cop: 4_300_000,
       commission_amount_cop: 400_000,
-      fixed_fee_amount_cop: 105_000,
+      fixed_fee_amount_cop: 0,
       maintenance_deduction_cop: 420_000,
-      net_payable_cop: 3_375_000,
+      net_payable_cop: 3_480_000,
       sha256_seal: computeSettlementSeal(
         1,
         '2026-09',
         4_300_000,
         400_000,
-        105_000,
+        0,
         420_000,
-        3_375_000
+        3_480_000
       ),
       status: 'EJECUTADO',
       created_at: '2026-09-30T17:45:00Z',
+      lines_snapshot: [
+        {
+          property_id: 2,
+          property_code: 'SUB-FACA-101',
+          property_title: 'Torre 1 - Apto 101',
+          property_type: 'APARTAMENTO',
+          owner_share_pct: 100,
+          property_gross_collected_cop: 1_500_000,
+          gross_collected_cop: 1_500_000,
+          commission_pct: 8.0,
+          percentage_fee_cop: 120_000,
+          net_unit_cop: 1_380_000,
+        },
+        {
+          property_id: 4,
+          property_code: 'SUB-FACA-LOC1',
+          property_title: 'Local Esquinero 01',
+          property_type: 'LOCAL COMERCIAL',
+          owner_share_pct: 100,
+          property_gross_collected_cop: 2_800_000,
+          gross_collected_cop: 2_800_000,
+          commission_pct: 10.0,
+          percentage_fee_cop: 280_000,
+          net_unit_cop: 2_520_000,
+        },
+      ],
+      maintenances_snapshot: [
+        {
+          id: 3,
+          property_id: 2,
+          property_code: 'SUB-FACA-101',
+          property_title: 'Torre 1 - Apto 101',
+          execution_date: '2026-09-14',
+          category: 'IMPERMEABILIZACIÓN',
+          description: 'Sellado acrílico de terraza y bajante pluvial',
+          technician_name: 'Soluciones Civiles Cundinamarca',
+          invoice_number: 'FAC-7710',
+          total_net_cost_cop: 420_000,
+          owner_share_pct: 100,
+          prorated_deduction_cop: 420_000,
+          receipt_image_path: 'evidencias/recibo_imper_sep.jpg',
+        },
+      ],
+    },
+    {
+      id: 2,
+      owner_id: 1,
+      period_month: '2026-08',
+      gross_income_cop: 4_300_000,
+      commission_amount_cop: 400_000,
+      fixed_fee_amount_cop: 0,
+      maintenance_deduction_cop: 0,
+      net_payable_cop: 3_900_000,
+      sha256_seal: computeSettlementSeal(
+        1,
+        '2026-08',
+        4_300_000,
+        400_000,
+        0,
+        0,
+        3_900_000
+      ),
+      status: 'EJECUTADO',
+      created_at: '2026-08-31T18:10:00Z',
+      lines_snapshot: [
+        {
+          property_id: 2,
+          property_code: 'SUB-FACA-101',
+          property_title: 'Torre 1 - Apto 101',
+          property_type: 'APARTAMENTO',
+          owner_share_pct: 100,
+          property_gross_collected_cop: 1_500_000,
+          gross_collected_cop: 1_500_000,
+          commission_pct: 8.0,
+          percentage_fee_cop: 120_000,
+          net_unit_cop: 1_380_000,
+        },
+        {
+          property_id: 4,
+          property_code: 'SUB-FACA-LOC1',
+          property_title: 'Local Esquinero 01',
+          property_type: 'LOCAL COMERCIAL',
+          owner_share_pct: 100,
+          property_gross_collected_cop: 2_800_000,
+          gross_collected_cop: 2_800_000,
+          commission_pct: 10.0,
+          percentage_fee_cop: 280_000,
+          net_unit_cop: 2_520_000,
+        },
+      ],
+      maintenances_snapshot: [],
+    },
+    {
+      id: 3,
+      owner_id: 2,
+      period_month: '2026-09',
+      gross_income_cop: 6_800_000,
+      commission_amount_cop: 612_000,
+      fixed_fee_amount_cop: 0,
+      maintenance_deduction_cop: 0,
+      net_payable_cop: 6_188_000,
+      sha256_seal: computeSettlementSeal(
+        2,
+        '2026-09',
+        6_800_000,
+        612_000,
+        0,
+        0,
+        6_188_000
+      ),
+      status: 'EJECUTADO',
+      created_at: '2026-09-30T18:00:00Z',
+      lines_snapshot: [
+        {
+          property_id: 7,
+          property_code: 'SUB-POB-301',
+          property_title: 'Oficina 301 Ejecutiva',
+          property_type: 'OFICINA',
+          owner_share_pct: 100,
+          property_gross_collected_cop: 3_600_000,
+          gross_collected_cop: 3_600_000,
+          commission_pct: 9.0,
+          percentage_fee_cop: 324_000,
+          net_unit_cop: 3_276_000,
+        },
+        {
+          property_id: 8,
+          property_code: 'SUB-POB-302',
+          property_title: 'Oficina 302 Co-Working',
+          property_type: 'OFICINA',
+          owner_share_pct: 100,
+          property_gross_collected_cop: 3_200_000,
+          gross_collected_cop: 3_200_000,
+          commission_pct: 9.0,
+          percentage_fee_cop: 288_000,
+          net_unit_cop: 2_912_000,
+        },
+      ],
+      maintenances_snapshot: [],
     },
   ];
 
@@ -793,11 +1357,77 @@ function createInitialSeedState(): LocalDatabaseState {
   };
 }
 
+const STORAGE_KEY = 'inmo_control_v2_state_v2';
+
+function loadPersistedState(): LocalDatabaseState {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as LocalDatabaseState;
+        if (parsed && Array.isArray(parsed.owners) && Array.isArray(parsed.properties)) {
+          // Ensure all properties have fixed_fee_cop = 0 (strictly percentage commission)
+          parsed.properties = parsed.properties.map((p) => ({
+            ...p,
+            fixed_fee_cop: 0,
+          }));
+          if (Array.isArray(parsed.settlements)) {
+            parsed.settlements = parsed.settlements.map((s) => {
+              if (s.fixed_fee_amount_cop > 0) {
+                const updatedNet =
+                  s.gross_income_cop -
+                  s.commission_amount_cop -
+                  s.maintenance_deduction_cop;
+                return {
+                  ...s,
+                  fixed_fee_amount_cop: 0,
+                  net_payable_cop: updatedNet,
+                  sha256_seal: computeSettlementSeal(
+                    s.owner_id,
+                    s.period_month,
+                    s.gross_income_cop,
+                    s.commission_amount_cop,
+                    0,
+                    s.maintenance_deduction_cop,
+                    updatedNet
+                  ),
+                };
+              }
+              return s;
+            });
+          }
+          return parsed;
+        }
+      }
+    }
+  } catch {
+    // Fallback to seed state if storage is unavailable
+  }
+  return createInitialSeedState();
+}
+
 class InmoRepositoryImpl {
-  private state: LocalDatabaseState = createInitialSeedState();
+  private state: LocalDatabaseState = loadPersistedState();
+
+  private persistState(): void {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+      }
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
 
   public resetToSeed(): void {
     this.state = createInitialSeedState();
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage errors
+    }
   }
 
   public getAllProperties(): Property[] {
@@ -812,7 +1442,7 @@ class InmoRepositoryImpl {
     const targetOwnerId = selectedOwner.id;
 
     const properties = this.state.properties
-      .filter((p) => p.owner_id === targetOwnerId)
+      .filter((p) => getOwnerSharePct(p, targetOwnerId) > 0)
       .sort((a, b) => {
         const groupA = a.parent_property_id ?? a.id;
         const groupB = b.parent_property_id ?? b.id;
@@ -824,6 +1454,7 @@ class InmoRepositoryImpl {
       });
 
     const propIds = new Set(properties.map((p) => p.id));
+    const propById = new Map(properties.map((p) => [p.id, p]));
 
     const participation = calculateAgencyParticipation(
       targetOwnerId,
@@ -843,7 +1474,14 @@ class InmoRepositoryImpl {
 
     const expectedMonthlyCollectionCop = ownerRentable
       .filter((p) => p.status === 'OCUPADO')
-      .reduce((sum, p) => sum + p.base_rent_cop, 0);
+      .reduce(
+        (sum, p) =>
+          sum +
+          Math.round(
+            p.base_rent_cop * (getOwnerSharePct(p, targetOwnerId) / 100)
+          ),
+        0
+      );
 
     const contracts = this.state.contracts
       .filter((c) => propIds.has(c.property_id))
@@ -855,19 +1493,34 @@ class InmoRepositoryImpl {
 
     const collectedMonthlyCop = payments
       .filter((rp) => rp.status === 'PAGADO')
-      .reduce((sum, rp) => sum + rp.gross_amount_cop, 0);
+      .reduce((sum, rp) => {
+        const prop = propById.get(rp.property_id);
+        const sharePct = prop ? getOwnerSharePct(prop, targetOwnerId) : 100;
+        return sum + Math.round(rp.gross_amount_cop * (sharePct / 100));
+      }, 0);
 
     const maintenances = this.state.maintenances
       .filter((m) => propIds.has(m.property_id))
       .sort((a, b) => b.id - a.id);
 
     const pendingMaintenanceCop = maintenances
-      .filter((m) => m.deduction_status === 'Por Liquidar')
-      .reduce((sum, m) => sum + m.net_cost_cop, 0);
+      .filter(
+        (m) =>
+          m.deduction_status === 'Por Liquidar' &&
+          !m.settled_owner_ids?.includes(targetOwnerId)
+      )
+      .reduce((sum, m) => {
+        const prop = propById.get(m.property_id);
+        const sharePct = prop ? getOwnerSharePct(prop, targetOwnerId) : 100;
+        return sum + Math.round(m.net_cost_cop * (sharePct / 100));
+      }, 0);
 
     const settlements = this.state.settlements
       .filter((s) => s.owner_id === targetOwnerId)
-      .sort((a, b) => b.id - a.id);
+      .sort(
+        (a, b) =>
+          b.period_month.localeCompare(a.period_month) || b.id - a.id
+      );
 
     const elapsedMs = Math.max(
       0.4,
@@ -902,6 +1555,7 @@ class InmoRepositoryImpl {
       created_at: new Date().toISOString(),
     };
     this.state.owners.push(owner);
+    this.persistState();
     return owner;
   }
 
@@ -914,6 +1568,7 @@ class InmoRepositoryImpl {
       created_at: new Date().toISOString(),
     };
     this.state.properties.push(prop);
+    this.persistState();
     return prop;
   }
 
@@ -931,17 +1586,68 @@ class InmoRepositoryImpl {
     if (prop) {
       prop.status = 'OCUPADO';
     }
+    this.persistState();
     return contract;
   }
 
   public recordRentPayment(input: NewRentPaymentInput): RentPayment {
+    const amount = Number(input.gross_amount_cop || 0);
+    if (amount <= 0) {
+      throw new Error('El valor del recaudo o abono debe ser mayor a $0 COP.');
+    }
+
+    const currentPeriod = getCurrentPeriodMonth();
+    if (input.period_month > currentPeriod) {
+      throw new Error(
+        `Operación bloqueada: El periodo ${input.period_month} aún no ha llegado. El cobro se activa únicamente cuando llegue la fecha de corte.`
+      );
+    }
+
+    const contract =
+      (input.contract_id
+        ? this.state.contracts.find((c) => c.id === input.contract_id)
+        : undefined) ??
+      this.state.contracts.find(
+        (c) => c.property_id === input.property_id && c.status !== 'FINALIZADO'
+      ) ??
+      this.state.contracts.find((c) => c.property_id === input.property_id);
+
+    if (contract?.start_date) {
+      const registrationPeriod = contract.start_date.slice(0, 7);
+      if (input.period_month < registrationPeriod) {
+        throw new Error(
+          `Operación bloqueada: No se pueden cobrar meses anteriores (${input.period_month}) a la fecha de registro del inquilino (${contract.start_date}).`
+        );
+      }
+    }
+
+    const status = getPeriodCollectionStatus(
+      input.property_id,
+      input.period_month,
+      this.state.properties,
+      this.state.contracts,
+      this.state.payments,
+      input.contract_id
+    );
+
+    if (
+      status.agreedRentCop > 0 &&
+      status.alreadyCollectedCop + amount > status.agreedRentCop
+    ) {
+      throw new Error(
+        `El abono de ${formatCop(amount)} supera el saldo pendiente del periodo ${input.period_month} (Pactado: ${formatCop(status.agreedRentCop)} · Abonado: ${formatCop(status.alreadyCollectedCop)} · Saldo máximo permitido: ${formatCop(status.remainingBalanceCop)}).`
+      );
+    }
+
     const nextId =
       this.state.payments.reduce((max, rp) => Math.max(max, rp.id), 0) + 1;
     const payment: RentPayment = {
       id: nextId,
       ...input,
+      gross_amount_cop: amount,
     };
     this.state.payments.push(payment);
+    this.persistState();
     return payment;
   }
 
@@ -967,6 +1673,7 @@ class InmoRepositoryImpl {
       settlement_id: null,
     };
     this.state.maintenances.push(expense);
+    this.persistState();
     return expense;
   }
 
@@ -984,7 +1691,7 @@ class InmoRepositoryImpl {
     const snapshot = JSON.stringify(this.state);
     try {
       const ownerProps = this.state.properties.filter(
-        (p) => p.owner_id === ownerId
+        (p) => getOwnerSharePct(p, ownerId) > 0
       );
       const ownerPropIds = new Set(ownerProps.map((p) => p.id));
       const ownerPayments = this.state.payments.filter((rp) =>
@@ -994,13 +1701,67 @@ class InmoRepositoryImpl {
         ownerPropIds.has(m.property_id)
       );
 
+      const ownerContracts = this.state.contracts.filter((c) =>
+        ownerPropIds.has(c.property_id)
+      );
+
       const preview = calculateOwnerSettlementPreview(
         ownerId,
         ownerProps,
         ownerPayments,
         ownerMaintenances,
-        periodMonth
+        periodMonth,
+        ownerContracts
       );
+
+      const propById = new Map(ownerProps.map((p) => [p.id, p]));
+
+      const linesSnapshot = preview.lines.map((line) => ({
+        property_id: line.property.id,
+        property_code: line.property.code,
+        property_title: line.property.title,
+        property_type: line.property.property_type,
+        owner_share_pct: line.ownerSharePct,
+        agreed_rent_cop: line.agreedRentCop,
+        remaining_balance_cop: line.remainingBalanceCop,
+        is_partial_payment: line.isPartialPayment,
+        abonos_count: line.abonosCount,
+        abonos_breakdown: line.paymentsBreakdown.map((rp) => ({
+          id: rp.id,
+          reference_code: rp.reference_code,
+          payment_date: rp.payment_date,
+          payment_method: rp.payment_method,
+          gross_amount_cop: rp.gross_amount_cop,
+          owner_dividend_cop: Math.round(
+            rp.gross_amount_cop * (line.ownerSharePct / 100)
+          ),
+        })),
+        property_gross_collected_cop: line.propertyGrossCollectedCop,
+        gross_collected_cop: line.grossCollectedCop,
+        commission_pct: line.property.commission_pct,
+        percentage_fee_cop: line.percentageFeeCop,
+        net_unit_cop: line.grossCollectedCop - line.percentageFeeCop,
+      }));
+
+      const maintenancesSnapshot = preview.pendingMaintenances.map((m) => {
+        const prop = propById.get(m.property_id);
+        const sharePct = prop ? getOwnerSharePct(prop, ownerId) : 100;
+        return {
+          id: m.id,
+          property_id: m.property_id,
+          property_code: prop?.code ?? `INM-${m.property_id}`,
+          property_title: prop?.title ?? `Inmueble #${m.property_id}`,
+          execution_date: m.execution_date,
+          category: m.category,
+          description: m.description,
+          technician_name: m.technician_name,
+          invoice_number: m.invoice_number,
+          total_net_cost_cop: m.net_cost_cop,
+          owner_share_pct: sharePct,
+          prorated_deduction_cop: Math.round(m.net_cost_cop * (sharePct / 100)),
+          receipt_image_path: m.receipt_image_path,
+        };
+      });
 
       const nextId =
         this.state.settlements.reduce((max, s) => Math.max(max, s.id), 0) + 1;
@@ -1011,12 +1772,14 @@ class InmoRepositoryImpl {
         period_month: periodMonth,
         gross_income_cop: preview.grossIncomeCop,
         commission_amount_cop: preview.commissionAmountCop,
-        fixed_fee_amount_cop: preview.fixedFeeAmountCop,
+        fixed_fee_amount_cop: 0,
         maintenance_deduction_cop: preview.maintenanceDeductionCop,
         net_payable_cop: preview.netPayableCop,
         sha256_seal: preview.sha256PreviewSeal,
         status: 'EJECUTADO',
         created_at: new Date().toISOString(),
+        lines_snapshot: linesSnapshot,
+        maintenances_snapshot: maintenancesSnapshot,
       };
 
       this.state.settlements.push(settlement);
@@ -1024,13 +1787,32 @@ class InmoRepositoryImpl {
       for (const maint of this.state.maintenances) {
         if (
           ownerPropIds.has(maint.property_id) &&
-          maint.deduction_status === 'Por Liquidar'
+          maint.deduction_status === 'Por Liquidar' &&
+          !maint.settled_owner_ids?.includes(ownerId)
         ) {
-          maint.deduction_status = 'Liquidado';
+          const settledSet = new Set(maint.settled_owner_ids ?? []);
+          settledSet.add(ownerId);
+          maint.settled_owner_ids = Array.from(settledSet);
           maint.settlement_id = settlement.id;
+
+          const prop = propById.get(maint.property_id);
+          const requiredOwners =
+            prop?.co_owners && prop.co_owners.length > 0
+              ? prop.co_owners
+                  .filter((co) => co.share_pct > 0)
+                  .map((co) => co.owner_id)
+              : [ownerId];
+
+          const allCoOwnersSettled = requiredOwners.every((oid) =>
+            settledSet.has(oid)
+          );
+          if (allCoOwnersSettled) {
+            maint.deduction_status = 'Liquidado';
+          }
         }
       }
 
+      this.persistState();
       return settlement;
     } catch (err) {
       this.state = JSON.parse(snapshot);
@@ -1060,6 +1842,7 @@ class InmoRepositoryImpl {
           contract.status = 'FINALIZADO';
         }
       }
+      this.persistState();
     } catch (err) {
       this.state = JSON.parse(snapshot);
       throw err;

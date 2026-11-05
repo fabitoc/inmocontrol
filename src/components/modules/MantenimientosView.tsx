@@ -5,6 +5,7 @@ import {
 } from '../../types/domain';
 import {
   formatCop,
+  formatCopInWords,
   normalizeEvidencePath,
 } from '../../services/inmoService';
 
@@ -248,10 +249,17 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
               </span>
               <input
                 type="number"
+                data-testid="input-net-cost-cop"
                 value={netCostCop}
                 onChange={(e) => setNetCostCop(Number(e.target.value))}
                 className="w-full bg-[#1a1b20] border border-[#ffb800]/60 px-3 py-2 text-[#ffb800] font-bold"
               />
+              <span
+                data-testid="net-cost-words"
+                className="text-[11px] text-[#ffb800] mt-1 block"
+              >
+                {formatCop(netCostCop)} — {formatCopInWords(netCostCop)}
+              </span>
             </label>
 
             {/* Single File Upload: Receipt Image */}

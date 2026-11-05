@@ -64,6 +64,13 @@ Real-estate agencies need maximum privacy, sub-300ms analytical reactivity, dete
     - `npm run build`: `PASS` (`tsc && vite build` succeeded in `1.07s`, `dist/assets/index-BIqddnBt.js` `65.05 kB` gzipped).
     - `cargo test --manifest-path src-tauri/Cargo.toml`: `env-blocked` on host until Visual Studio C++ Build Tools (`link.exe`) is installed.
 
+- [x] **T6 — Co-Ownership Dividends, Percentage-Only Commission, PDF Settlement Invoices, Historical Settlements, Abono Breakdown & Cutoff Billing Rules**
+  - **Route**: `direct-inline`.
+  - **Risk Tier**: `medium` (settlement calculation proration, PDF 1.4 generation, tenant registration initial payment, and period/overpayment guardrails).
+  - **Checks**:
+    - `npm test`: `PASS` (`12/12` tests passed in `src/__tests__/inmoControl.test.tsx`).
+    - `npm run build`: `PASS` (`tsc && vite build` succeeded cleanly in `1.72s`).
+
 ## Acceptance Criteria
 1. SQLite database runs in `WAL` mode at `%LocalAppData%\InmoControl\data\inmo_database.db` and executes `VACUUM INTO` backups on startup and shutdown (retaining 30 days).
 2. `properties` table includes `parent_property_id` (self-referencing FK) and `maintenance_expenses` includes `receipt_image_path` (TEXT) and `evidence_images_paths` (JSON array TEXT) pointing to `%LocalAppData%\InmoControl\evidencias\`.

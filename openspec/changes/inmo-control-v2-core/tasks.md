@@ -26,3 +26,17 @@
 
 - [x] **Task 7: Viewport Vertical Scroll Fix on Main HUD Shell** (`33734ce`)
   - Enable `overflow-y-auto` on the `<main>` container in `AppShell` so all 5 separated HUD views scroll smoothly on smaller desktop viewports.
+
+- [x] **Task 8: Co-Ownership Dividend Proration & Percentage-Only Commission Model**
+  - Implement `getOwnerSharePct()` in `src/services/inmoService.ts` and propagate `co_owners` to child sub-units in `RegistroControlView.tsx`.
+  - Remove fixed base fee (`fixed_fee_cop = 0`) across UI and settlement previews; track `settled_owner_ids` on `MaintenanceExpense` for multi-owner 1:1 deductions.
+
+- [x] **Task 9: PDF 1.4 Settlement Invoice Generator & Historical Settlements View**
+  - Create dependency-free `src/services/pdfInvoiceService.ts` (`buildInvoiceFromPreview`, `buildInvoiceFromHistoricalSettlement`, `generateSettlementPdfContent`, `downloadSettlementInvoicePdf`).
+  - Add `[ FACTURA PDF ]` action and `[ HISTORIAL DE LIQUIDACIONES ]` view toggle in `src/components/modules/LiquidacionesView.tsx`.
+
+- [x] **Task 10: Mandatory Initial Tenant Payment/Abono, Abono Breakdown in `Desglose de Recaudos`, Overpayment Guardrail & Cutoff-Driven Period Restriction**
+  - Require initial full payment (`PAGO COMPLETO DEL ALQUILER`) or partial advance (`ABONO PARCIAL DE ALQUILER`) in `03 // Vinculación de Inquilino`.
+  - Enforce cumulative period overpayment guardrail in `recordRentPayment()` and `handlePaymentSubmit()`.
+  - Render detailed per-unit abono breakdown (`paymentsBreakdown` / `abonos_breakdown`, `[ABONO PARCIAL · SALDO PENDIENTE]` badge, agreed rent, remaining balance) in `LiquidacionesView.tsx`, `pdfInvoiceService.ts`, and `RegistroControlView.tsx`.
+  - Implement `getContractBillingCycleState()` so `04 // Registro de Recaudo Mensual` blocks months prior to tenant registration (`contract.start_date`) and future months (`> getCurrentPeriodMonth()`), activating billing cycles automatically by `cutoff_day`.

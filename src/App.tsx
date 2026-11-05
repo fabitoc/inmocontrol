@@ -64,13 +64,16 @@ export const App: React.FC = () => {
   };
 
   const handleCreateProperty = (input: NewPropertyInput) => {
-    inmoRepository.createProperty(input);
+    const created = inmoRepository.createProperty(input);
+    setSelectedOwnerId(created.owner_id);
     bumpRevision();
+    return created;
   };
 
   const handleCreateContract = (input: NewContractInput) => {
-    inmoRepository.createTenantContract(input);
+    const created = inmoRepository.createTenantContract(input);
     bumpRevision();
+    return created;
   };
 
   const handleRecordPayment = (input: NewRentPaymentInput) => {

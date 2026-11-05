@@ -14,6 +14,7 @@ export interface Owner {
   bank_name: string;
   bank_account_type: 'AHORROS' | 'CORRIENTE' | string;
   bank_account_number: string;
+  cutoff_day?: number;
   created_at: string;
 }
 
@@ -25,13 +26,20 @@ export interface NewOwnerInput {
   bank_name: string;
   bank_account_type: string;
   bank_account_number: string;
+  cutoff_day?: number;
 }
 
 export type PropertyStatus = 'DISPONIBLE' | 'OCUPADO';
 
+export interface PropertyCoOwner {
+  owner_id: number;
+  share_pct: number;
+}
+
 export interface Property {
   id: number;
   owner_id: number;
+  co_owners?: PropertyCoOwner[];
   parent_property_id: number | null;
   code: string;
   title: string;
@@ -47,6 +55,7 @@ export interface Property {
 
 export interface NewPropertyInput {
   owner_id: number;
+  co_owners?: PropertyCoOwner[];
   parent_property_id: number | null;
   code: string;
   title: string;
@@ -129,6 +138,7 @@ export interface MaintenanceExpense {
   evidence_images_paths: string[];
   deduction_status: DeductionStatus;
   settlement_id: number | null;
+  settled_owner_ids?: number[];
 }
 
 export interface NewMaintenanceInput {
@@ -143,6 +153,49 @@ export interface NewMaintenanceInput {
   evidence_images_paths: string[];
 }
 
+export interface SettlementAbonoSnapshot {
+  id: number;
+  reference_code: string;
+  payment_date: string;
+  payment_method: string;
+  gross_amount_cop: number;
+  owner_dividend_cop: number;
+}
+
+export interface SettlementLineSnapshot {
+  property_id: number;
+  property_code: string;
+  property_title: string;
+  property_type: string;
+  owner_share_pct: number;
+  agreed_rent_cop?: number;
+  remaining_balance_cop?: number;
+  is_partial_payment?: boolean;
+  abonos_count?: number;
+  abonos_breakdown?: SettlementAbonoSnapshot[];
+  property_gross_collected_cop: number;
+  gross_collected_cop: number;
+  commission_pct: number;
+  percentage_fee_cop: number;
+  net_unit_cop: number;
+}
+
+export interface SettlementMaintenanceSnapshot {
+  id: number;
+  property_id: number;
+  property_code: string;
+  property_title: string;
+  execution_date: string;
+  category: string;
+  description: string;
+  technician_name: string;
+  invoice_number: string;
+  total_net_cost_cop: number;
+  owner_share_pct: number;
+  prorated_deduction_cop: number;
+  receipt_image_path: string;
+}
+
 export interface Settlement {
   id: number;
   owner_id: number;
@@ -155,6 +208,8 @@ export interface Settlement {
   sha256_seal: string;
   status: 'EJECUTADO';
   created_at: string;
+  lines_snapshot?: SettlementLineSnapshot[];
+  maintenances_snapshot?: SettlementMaintenanceSnapshot[];
 }
 
 export interface SmartAlert {

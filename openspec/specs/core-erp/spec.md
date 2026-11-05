@@ -8,30 +8,30 @@ Defines the core domain rules, financial settlement formulas, UI reactivity, pro
 
 ## Requirements
 
-### Requirement 1: Mixed Agency Commission
+### Requirement 1: Percentage-Only Agency Commission & Co-Ownership Dividend Proration
 
-The system MUST calculate agency commissions for each owner settlement using the mixed commission formula:
+The system MUST calculate agency commissions for each owner settlement strictly using a percentage-based commission formula (`Gross Income * Commission Percentage`, with `$0` fixed base fee) and prorate rent collections, commissions, and 1:1 maintenance deductions by each co-owner's participation share (`share_pct`).
 
-$$\text{Agency Commission} = (\text{Gross Income} \times \text{Commission Percentage}) + \text{Base Fixed Fee}$$
+$$\text{Owner Gross Dividend} = \text{Property Collected Rent} \times \frac{\text{Owner Share \%}}{100}$$
+$$\text{Agency Commission} = \text{Owner Gross Dividend} \times \frac{\text{Commission Percentage}}{100}$$
 
-- The system SHALL persist `commission_percentage` (decimal/percentage) and `base_fee` (fixed integer currency value) per owner record.
-- The system MUST compute the exact commission before applying operational deductions during monthly settlement previews and executions.
-
-#### Scenario: Standard Mixed Commission Calculation
-- **Given** an owner has a `commission_percentage` of `8%` (`0.08`) and a `base_fee` of `$85,000`
-- **And** the owner's properties generate a total `Gross Income` of `$4,200,000` for the active billing period
-- **When** the monthly settlement engine calculates the agency fee
-- **Then** the percentage component SHALL equal `$336,000` (`$4,200,000 * 0.08`)
-- **And** the total `Agency Commission` MUST equal `$421,000` (`$336,000 + $85,000`).
-
-#### Scenario: Zero Gross Income with Active Base Fee
-- **Given** an owner has a `commission_percentage` of `10%` and a `base_fee` of `$50,000`
-- **And** the owner's properties have `$0` in collected `Gross Income` for the period
-- **When** the monthly settlement preview is generated
-- **Then** the percentage component SHALL equal `$0`
-- **And** the total `Agency Commission` SHALL equal the `$50,000` `base_fee`.
+- The system SHALL persist `commission_pct` per property/sub-unit (`fixed_fee_cop = 0`) and `co_owners` (`owner_id`, `share_pct`) across single and multi-unit properties (inheriting `co_owners` to child sub-units).
+- Multi-owner maintenance expenses MUST track `settled_owner_ids` so each co-owner is deducted their exact `share_pct` portion once, transitioning to `Liquidado` only when all co-owners have settled.
 
 ---
+
+### Requirement 6: PDF Settlement Invoicing & Historical Settlements Ledger
+
+The system MUST generate downloadable PDF 1.4 settlement invoices (`pdfInvoiceService.ts`) containing the full financial breakdown (owner bank dispersion metadata, per-unit collection/abono and commission lines, 1:1 maintenance deductions, COP-in-words total, and SHA-256 integrity seal) and provide a dedicated `Historial de Liquidaciones` view to inspect and re-download past executed settlements.
+
+---
+
+### Requirement 7: Mandatory Initial Tenant Payment/Abono, Abono Breakdown & Cutoff-Driven Billing Periods
+
+- **Initial Payment at Registration (`03 // Vinculación de Inquilino`)**: Registering a tenant contract MUST require and record either a 100% full rent payment (`PAGO COMPLETO DEL ALQUILER`) or a partial advance (`ABONO PARCIAL DE ALQUILER` `> $0` and `<= monthly_rent_cop`).
+- **Cumulative Overpayment Guardrail (`04 // Registro de Recaudo Mensual`)**: Cumulative `PAGADO` abonos for a property in a period MUST NOT exceed the agreed monthly rent (`agreedRentCop`).
+- **Cutoff-Driven Period Activation (`getContractBillingCycleState`)**: In `04 // Registro de Recaudo Mensual`, the system MUST forbid charging any period prior to the tenant's registration date (`contract.start_date`) and forbid selecting any future period (`> getCurrentPeriodMonth()`), activating the billing cycle automatically by the contract's `cutoff_day`.
+- **Detailed Abono Breakdown in `Desglose de Recaudos`**: Both `LiquidacionesView` and the generated PDF invoice MUST display `[ABONO PARCIAL · SALDO PENDIENTE]` vs `[PAGO COMPLETO 100%]`, agreed rent vs remaining balance, and the individual list of recorded abonos (`Abono #1`, reference code, payment method, date, and prorated dividend amount).
 
 ### Requirement 2: Zero Operational Markups
 

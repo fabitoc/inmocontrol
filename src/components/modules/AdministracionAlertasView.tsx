@@ -240,8 +240,8 @@ export const AdministracionAlertasView: React.FC<
                               </div>
                               <div className="text-[11px] text-[#9ca3af] pl-6">
                                 Canon: {formatCop(child.base_rent_cop)} ·
-                                Comisión: {child.commission_pct}% +{' '}
-                                {formatCop(child.fixed_fee_cop)}
+                                Comisión: {child.commission_pct}% · Corte: Día{' '}
+                                {child.cutoff_day}
                                 {childContract
                                   ? ` · ${childContract.tenant_name}`
                                   : ' · Unidad Vacante'}
