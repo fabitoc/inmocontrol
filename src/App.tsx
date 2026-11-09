@@ -235,6 +235,7 @@ export const App: React.FC = () => {
                 bundle={bundle}
                 allProperties={allProperties}
                 onNavigateModule={setActiveModule}
+                onRecordPayment={handleRecordPayment}
               />
             )}
 

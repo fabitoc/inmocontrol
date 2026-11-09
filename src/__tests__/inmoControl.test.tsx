@@ -93,11 +93,11 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     fireEvent.click(screen.getByTestId('nav-registro-control'));
     expect(screen.getByTestId('module-registro-control')).toBeInTheDocument();
 
-    // Verify all 4 isolated view tabs exist and Tab 01 (Propietario) is active by default
+    // Verify all 3 isolated registration tabs exist in Module 2 and Tab 01 (Propietario) is active by default
     const tabPropietario = screen.getByTestId('tab-propietario');
     const tabInmueble = screen.getByTestId('tab-inmueble');
     const tabInquilino = screen.getByTestId('tab-inquilino');
-    const tabRecaudo = screen.getByTestId('tab-recaudo');
+    expect(screen.queryByTestId('tab-recaudo')).not.toBeInTheDocument();
 
     expect(tabPropietario).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('panel-propietario')).toBeInTheDocument();
@@ -130,14 +130,10 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       screen.queryByLabelText('Fecha de Corte Mensual')
     ).not.toBeInTheDocument();
 
-    // Switch to Tab 03 (Inquilino) and Tab 04 (Recaudo) to verify isolated views
+    // Switch to Tab 03 (Inquilino) to verify isolated view
     fireEvent.click(tabInquilino);
     expect(screen.getByTestId('panel-inquilino')).toBeInTheDocument();
     expect(screen.queryByTestId('panel-inmueble')).not.toBeInTheDocument();
-
-    fireEvent.click(tabRecaudo);
-    expect(screen.getByTestId('panel-recaudo')).toBeInTheDocument();
-    expect(screen.queryByTestId('panel-inquilino')).not.toBeInTheDocument();
 
     // Navigate to Module 4 (Administración y Alertas)
     fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
@@ -199,12 +195,12 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     expect(screen.getByTestId('panel-inquilino')).toBeInTheDocument();
     expect(screen.queryByTestId('panel-recaudo')).not.toBeInTheDocument();
 
-    // Switch to Recaudo
-    fireEvent.click(screen.getByTestId('tab-recaudo'));
-    expect(screen.queryByTestId('panel-propietario')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('panel-inmueble')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('panel-inquilino')).not.toBeInTheDocument();
+    // Return to Dashboard and open 04 // Registro de Recaudo Mensual modal via [ PAGAR ] button
+    fireEvent.click(screen.getByTestId('nav-dashboard-analitico'));
+    fireEvent.click(screen.getByTestId('dashboard-pay-button-2'));
+    expect(screen.getByTestId('payment-modal-dialog')).toBeInTheDocument();
     expect(screen.getByTestId('panel-recaudo')).toBeInTheDocument();
+    expect(screen.getByTestId('modal-recent-payments')).toBeInTheDocument();
   });
 
   it('registers a property with subdivisions, supports per-division commission override without fixed fee, and expands/collapses subdivisions in summary', () => {
@@ -383,13 +379,15 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       '$2.000 — Dos mil pesos'
     );
 
-    // Tab 04 (Recaudo)
-    fireEvent.click(screen.getByTestId('tab-recaudo'));
+    // Dashboard [ PAGAR ] Modal -> 04 // Registro de Recaudo Mensual
+    fireEvent.click(screen.getByTestId('nav-dashboard-analitico'));
+    fireEvent.click(screen.getByTestId('dashboard-pay-button-2'));
     const paymentAmountInput = screen.getByTestId('input-payment-amount-cop');
     fireEvent.change(paymentAmountInput, { target: { value: '2000' } });
     expect(screen.getByTestId('payment-amount-words')).toHaveTextContent(
       '$2.000 — Dos mil pesos'
     );
+    fireEvent.click(screen.getByTestId('close-payment-modal-button'));
 
     // Module 3 (Mantenimientos)
     fireEvent.click(screen.getByTestId('nav-mantenimientos'));
@@ -563,19 +561,42 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     );
   });
 
-  it('focuses current period in 04 // Recaudo, auto-populates agreed property rent, includes current month in Liquidaciones, and blocks overpayments beyond agreed rent', () => {
+  it('opens 04 // Registro de Recaudo Mensual from Dashboard [ PAGAR ] button, restricts payment methods to EFECTIVO and TRANSACCIÓN without bank reference, keeps [ PAGAR ] enabled across partial abonos, and disables it once AL DÍA', () => {
     const currentMonth = getCurrentPeriodMonth();
     render(<App />);
 
-    // 1. Navigate to 02 // Registro y Control -> 04 // Recaudo Mensual
-    fireEvent.click(screen.getByTestId('nav-registro-control'));
-    fireEvent.click(screen.getByTestId('tab-recaudo'));
+    // Verify occupancy badges ([OCUPADO] / [DISPONIBLE]) are rendered in ACTIVO / JERARQUÍA and ESTADO shows [MOROSO] / [AL DÍA]
+    expect(screen.getByTestId('dashboard-occupancy-badge-2')).toHaveTextContent(
+      '[OCUPADO]'
+    );
+    expect(screen.getByTestId('dashboard-occupancy-badge-3')).toHaveTextContent(
+      '[DISPONIBLE]'
+    );
+    expect(screen.getByTestId('dashboard-tenant-status-2')).toHaveTextContent(
+      '[MOROSO]'
+    );
+    expect(screen.getByTestId('dashboard-pay-button-2')).not.toBeDisabled();
+    expect(screen.getByTestId('dashboard-pay-button-3')).toBeDisabled();
+
+    // 1. Click [ PAGAR ] on Property 2 in Dashboard to open the modal window
+    fireEvent.click(screen.getByTestId('dashboard-pay-button-2'));
+    expect(screen.getByTestId('payment-modal-dialog')).toBeInTheDocument();
 
     const periodSelect = screen.getByTestId(
       'select-payment-period'
     ) as HTMLSelectElement;
     expect(periodSelect).toHaveValue(currentMonth);
     expect(document.activeElement).toBe(periodSelect);
+
+    // Verify Medio de Pago has ONLY EFECTIVO and TRANSACCIÓN, and no Referencia Bancaria input exists
+    const methodSelect = screen.getByTestId(
+      'select-payment-method'
+    ) as HTMLSelectElement;
+    const methodOptions = Array.from(methodSelect.options).map((o) => o.value);
+    expect(methodOptions).toEqual(['EFECTIVO', 'TRANSACCIÓN']);
+    expect(
+      screen.queryByLabelText(/Referencia Bancaria/i)
+    ).not.toBeInTheDocument();
 
     // 2. Verify initial selected property (Prop 2: $1.500.000) brings agreed rent, and switching to Prop 4 brings $2.800.000
     const amountInput = screen.getByTestId(
@@ -591,6 +612,7 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     );
 
     // 3. Make a partial payment (abono) of $1.000.000 for currentMonth on Prop 4 ($2.800.000 agreed)
+    fireEvent.change(methodSelect, { target: { value: 'EFECTIVO' } });
     fireEvent.change(amountInput, { target: { value: '1000000' } });
     fireEvent.click(
       screen.getByRole('button', { name: /REGISTRAR ABONO EN LIBRO MAYOR/i })
@@ -602,8 +624,12 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     expect(
       screen.getByTestId('payment-remaining-balance-cop')
     ).toHaveTextContent('$1.800.000');
-    // Amount input automatically updates to the remaining balance ($1.800.000)
     expect(amountInput).toHaveValue(1_800_000);
+    // [ PAGAR ] on Prop 4 remains enabled because $1.800.000 is still owed
+    expect(screen.getByTestId('dashboard-pay-button-4')).not.toBeDisabled();
+    expect(screen.getByTestId('dashboard-tenant-status-4')).toHaveTextContent(
+      '[MOROSO]'
+    );
 
     // 4. Attempt a second payment of $2.000.000 (which exceeds the $1.800.000 remaining balance) -> MUST BE BLOCKED
     fireEvent.change(amountInput, { target: { value: '2000000' } });
@@ -614,23 +640,34 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     expect(screen.getByTestId('payment-error-feedback')).toHaveTextContent(
       /Operación bloqueada: El abono de \$2\.000\.000 supera el saldo pendiente/i
     );
-    // Already collected remains $1.000.000
     expect(
       screen.getByTestId('payment-already-collected-cop')
     ).toHaveTextContent('$1.000.000');
 
-    // 5. Navigate to Module 5 (Liquidaciones) and verify current month (e.g. 2026-11) is present and selected
+    // 5. Pay the remaining $1.800.000 on Prop 4 -> Prop 4 transitions to [AL DÍA] and [ PAGAR ] disables
+    fireEvent.change(amountInput, { target: { value: '1800000' } });
+    fireEvent.click(
+      screen.getByRole('button', { name: /REGISTRAR ABONO EN LIBRO MAYOR/i })
+    );
+    expect(screen.getByTestId('dashboard-tenant-status-4')).toHaveTextContent(
+      '[AL DÍA]'
+    );
+    expect(screen.getByTestId('dashboard-pay-button-4')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('close-payment-modal-button'));
+
+    // 6. Navigate to Module 5 (Liquidaciones) and verify current month (e.g. 2026-11) is present and selected with $2.800.000
     fireEvent.click(screen.getByTestId('nav-liquidaciones'));
     const settlementPeriodSelect = screen.getByTestId(
       'select-settlement-period'
     ) as HTMLSelectElement;
     expect(settlementPeriodSelect).toHaveValue(currentMonth);
     expect(screen.getByTestId('settlement-gross-income')).toHaveTextContent(
-      '$1.000.000'
+      '$2.800.000'
     );
   });
 
-  it('requires and records a full rent payment or partial advance (abono) during tenant registration in 03 // Vinculación de Inquilino', () => {
+  it('requires and records a full rent payment or partial advance (abono) during tenant registration in 03 // Vinculación de Inquilino, and blocks duplicate settlement approvals while routing subsequent movements to the next cutoff period', () => {
     render(<App />);
 
     fireEvent.click(screen.getByTestId('nav-registro-control'));
@@ -677,8 +714,11 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       /Abono Inicial \(\$650\.000 · Saldo pendiente.*\$800\.000\)/i
     );
 
-    // Switch to Tab 04 (Recaudo Mensual) and verify Property 3 has $650.000 already collected and $800.000 remaining
-    fireEvent.click(screen.getByTestId('tab-recaudo'));
+    // Return to Dashboard and open [ PAGAR ] modal for Property 3 to verify $650.000 collected and $800.000 remaining
+    fireEvent.click(screen.getByTestId('nav-dashboard-analitico'));
+    expect(screen.getByTestId('dashboard-pay-button-3')).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId('dashboard-pay-button-3'));
+
     expect(
       screen.getByTestId('payment-already-collected-cop')
     ).toHaveTextContent('$650.000');
@@ -687,7 +727,7 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     ).toHaveTextContent('$800.000');
     expect(screen.getByTestId('input-payment-amount-cop')).toHaveValue(800_000);
 
-    // Verify that in 04 // Recaudo Mensual, months prior to registration (e.g. 2026-10, 2026-09) and future months (e.g. 2026-12) cannot be selected
+    // Verify that in 04 // Registro de Recaudo Mensual modal, months prior to registration and future months cannot be selected
     const recaudoPeriodSelect = screen.getByTestId(
       'select-payment-period'
     ) as HTMLSelectElement;
@@ -696,8 +736,9 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     );
     expect(optionValues).toEqual([getCurrentPeriodMonth()]);
     expect(screen.getByTestId('payment-cutoff-cycle-info')).toHaveTextContent(
-      /Registro Inquilino:.*Corte: Día 5.*Próximo.*se activa el/i
+      /Registro Inquilino:.*Corte:.*Día 5.*Próximo.*se activa el/i
     );
+    fireEvent.click(screen.getByTestId('close-payment-modal-button'));
 
     // Also verify repository blocks charging any period prior to tenant registration or future period
     expect(() =>
@@ -707,8 +748,7 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
         period_month: '2026-09',
         gross_amount_cop: 100_000,
         payment_date: '2026-11-04',
-        payment_method: 'TRANSFERENCIA PSE',
-        reference_code: 'INVALID-PAST',
+        payment_method: 'TRANSACCIÓN',
         status: 'PAGADO',
       })
     ).toThrow(/No se pueden cobrar meses anteriores/i);
@@ -720,8 +760,7 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
         period_month: '2099-12',
         gross_amount_cop: 100_000,
         payment_date: '2026-11-04',
-        payment_method: 'TRANSFERENCIA PSE',
-        reference_code: 'INVALID-FUTURE',
+        payment_method: 'TRANSACCIÓN',
         status: 'PAGADO',
       })
     ).toThrow(/aún no ha llegado/i);
@@ -738,5 +777,15 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     expect(
       screen.getByTestId('settlement-line-abonos-list-3')
     ).toHaveTextContent('$650.000');
+
+    // Approve the settlement for current month and verify the button locks to prevent duplicate historical records
+    const approveBtn = screen.getByTestId('approve-settlement-button');
+    expect(approveBtn).not.toBeDisabled();
+    fireEvent.click(approveBtn);
+    expect(approveBtn).toBeDisabled();
+    expect(approveBtn).toHaveTextContent(/LIQUIDACIÓN YA APROBADA/i);
+    expect(() =>
+      inmoRepository.executeMonthlySettlement(1, getCurrentPeriodMonth())
+    ).toThrow(/ya fue aprobada y registrada en el historial/i);
   });
 });

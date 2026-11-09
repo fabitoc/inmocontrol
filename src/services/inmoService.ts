@@ -149,7 +149,8 @@ export function calculateOwnerSettlementPreview(
   payments: RentPayment[],
   maintenances: MaintenanceExpense[],
   periodMonth: string,
-  contracts: TenantContract[] = []
+  contracts: TenantContract[] = [],
+  settlements: Settlement[] = []
 ): OwnerSettlementPreview {
   const lines: SettlementPreviewLine[] = [];
   let grossIncomeCop = 0;
@@ -157,6 +158,9 @@ export function calculateOwnerSettlementPreview(
   const fixedFeeAmountCop = 0;
 
   const propById = new Map(properties.map((p) => [p.id, p]));
+  const isPeriodAlreadySettled = settlements.some(
+    (s) => s.owner_id === ownerId && s.period_month === periodMonth
+  );
 
   for (const prop of properties) {
     const sharePct = getOwnerSharePct(prop, ownerId);
@@ -166,7 +170,7 @@ export function calculateOwnerSettlementPreview(
       .filter(
         (rp) =>
           rp.property_id === prop.id &&
-          rp.period_month === periodMonth &&
+          (rp.settlement_period_month ?? rp.period_month) === periodMonth &&
           rp.status === 'PAGADO'
       )
       .sort((a, b) => a.id - b.id);
@@ -214,11 +218,15 @@ export function calculateOwnerSettlementPreview(
     }
   }
 
-  const pendingMaintenances = maintenances.filter(
-    (m) =>
-      m.deduction_status === 'Por Liquidar' &&
-      !m.settled_owner_ids?.includes(ownerId)
-  );
+  const pendingMaintenances = isPeriodAlreadySettled
+    ? []
+    : maintenances.filter(
+        (m) =>
+          m.deduction_status === 'Por Liquidar' &&
+          !m.settled_owner_ids?.includes(ownerId) &&
+          (!m.settlement_period_month ||
+            m.settlement_period_month <= periodMonth)
+      );
   // 1:1 net cost deduction prorated by owner's co-ownership share without agency operational markup
   const maintenanceDeductionCop = pendingMaintenances.reduce((sum, m) => {
     const prop = propById.get(m.property_id);
@@ -499,15 +507,104 @@ export function formatPeriodMonthLabel(
   return `${periodMonth} (${monthName} ${year}${suffix})`;
 }
 
+export function getNextPeriodMonth(periodMonth: string): string {
+  const [y, m] = periodMonth.split('-').map(Number);
+  const d = new Date(y, m, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export function resolveNextUnsettledCutoffPeriod(
+  ownerId: number,
+  basePeriodMonth: string,
+  settlements: Settlement[]
+): string {
+  let candidate = basePeriodMonth;
+  let guard = 0;
+  while (
+    settlements.some(
+      (s) => s.owner_id === ownerId && s.period_month === candidate
+    ) &&
+    guard < 24
+  ) {
+    candidate = getNextPeriodMonth(candidate);
+    guard++;
+  }
+  return candidate;
+}
+
+/**
+ * Automatically resolves the active cutoff period for an owner in `LiquidacionesView`:
+ * - Prioritizes the current period (`getCurrentPeriodMonth()`) or any next cutoff period that has unsettled movements (payments, abonos, or maintenances).
+ * - Falls back to the latest unsettled period with `PAGADO` payments (e.g. `2026-10` in seed state before approval), or `currentSystemPeriod`.
+ */
+export function resolveActiveSettlementPeriodForOwner(
+  ownerId: number,
+  payments: RentPayment[],
+  maintenances: MaintenanceExpense[],
+  settlements: Settlement[],
+  now: Date = new Date()
+): string {
+  const currentSystemPeriod = getCurrentPeriodMonth(now);
+  const settledPeriods = new Set(
+    settlements.filter((s) => s.owner_id === ownerId).map((s) => s.period_month)
+  );
+
+  const unsettledPaymentPeriods = payments
+    .filter(
+      (rp) =>
+        rp.status === 'PAGADO' && !rp.settled_owner_ids?.includes(ownerId)
+    )
+    .map((rp) => rp.settlement_period_month ?? rp.period_month)
+    .filter((p) => !settledPeriods.has(p))
+    .sort((a, b) => b.localeCompare(a));
+
+  if (unsettledPaymentPeriods.includes(currentSystemPeriod)) {
+    return currentSystemPeriod;
+  }
+  if (unsettledPaymentPeriods.length > 0) {
+    return unsettledPaymentPeriods[0];
+  }
+
+  const unsettledMaintPeriods = maintenances
+    .filter(
+      (m) =>
+        m.deduction_status === 'Por Liquidar' &&
+        !m.settled_owner_ids?.includes(ownerId) &&
+        m.settlement_period_month
+    )
+    .map((m) => m.settlement_period_month!)
+    .filter((p) => !settledPeriods.has(p))
+    .sort((a, b) => b.localeCompare(a));
+
+  if (unsettledMaintPeriods.length > 0) {
+    return unsettledMaintPeriods[0];
+  }
+
+  const hasCurrentMonthPaid = payments.some(
+    (rp) =>
+      (rp.settlement_period_month ?? rp.period_month) === currentSystemPeriod &&
+      rp.status === 'PAGADO'
+  );
+  if (hasCurrentMonthPaid) return currentSystemPeriod;
+
+  const latestPaid = payments
+    .filter((rp) => rp.status === 'PAGADO')
+    .map((rp) => rp.settlement_period_month ?? rp.period_month)
+    .sort((a, b) => b.localeCompare(a))[0];
+
+  return latestPaid || currentSystemPeriod;
+}
+
 /**
  * Builds a sorted list (newest first) of accounting periods (`YYYY-MM`), always including
  * the current month (`getCurrentPeriodMonth()`), recent rolling months, and any period
- * referenced by existing payments or settlements.
+ * referenced by existing payments, maintenances, or settlements.
  */
 export function getAccountingPeriodOptions(
   payments: RentPayment[] = [],
   settlements: Settlement[] = [],
-  now: Date = new Date()
+  now: Date = new Date(),
+  maintenances: MaintenanceExpense[] = []
 ): string[] {
   const currentPeriod = getCurrentPeriodMonth(now);
   const periods = new Set<string>([
@@ -532,9 +629,17 @@ export function getAccountingPeriodOptions(
     if (rp.period_month && rp.period_month <= currentPeriod) {
       periods.add(rp.period_month);
     }
+    if (rp.settlement_period_month) {
+      periods.add(rp.settlement_period_month);
+    }
+  }
+  for (const m of maintenances) {
+    if (m.settlement_period_month) {
+      periods.add(m.settlement_period_month);
+    }
   }
   for (const s of settlements) {
-    if (s.period_month && s.period_month <= currentPeriod) {
+    if (s.period_month) {
       periods.add(s.period_month);
     }
   }
@@ -676,6 +781,209 @@ export function getPeriodCollectionStatus(
     alreadyCollectedCop,
     remainingBalanceCop,
     isFullyPaid: agreedRentCop > 0 && remainingBalanceCop === 0,
+  };
+}
+
+export interface TenantPeriodBalanceSummary {
+  periodMonth: string;
+  agreedRentCop: number;
+  alreadyCollectedCop: number;
+  remainingBalanceCop: number;
+  isFullyPaid: boolean;
+}
+
+export interface PropertyTenantPaymentState {
+  propertyId: number;
+  hasActiveContract: boolean;
+  contract: TenantContract | null;
+  cutoffDay: number;
+  activePeriod: string;
+  agreedRentCop: number;
+  alreadyCollectedCop: number;
+  remainingBalanceCop: number;
+  totalRemainingDebtCop: number;
+  daysUntilCutoff: number;
+  activationDateLabel: string;
+  cutoffDateLabel: string;
+  isCutoffWindowOpen: boolean;
+  isAlDia: boolean;
+  statusLabel: 'AL DÍA' | 'MOROSO' | 'SIN INQUILINO' | 'MATRIZ';
+  canPay: boolean;
+  periodBalances: TenantPeriodBalanceSummary[];
+  recentPayments: RentPayment[];
+}
+
+/**
+ * Evaluates a property's tenant payment state for the Dashboard table and `[ PAGAR ]` modal:
+ * - Activates the `[ PAGAR ]` button when the tenant reaches their cutoff date or within 5 days before (`daysUntilCutoff <= 5`),
+ *   or whenever an active period has a partial payment (`abono`) or prior overdue balance.
+ * - Keeps `[ PAGAR ]` enabled across multiple partial `abonos` until 100% of the balance is paid (`totalRemainingDebtCop === 0`).
+ * - Disables `[ PAGAR ]` only when the tenant is `AL DÍA` (or when there is no active tenant).
+ * - Reports `statusLabel` as `'AL DÍA'` or `'MOROSO'` for the Dashboard `ESTADO` column.
+ */
+export function getPropertyTenantPaymentState(
+  propertyId: number,
+  properties: Property[],
+  contracts: TenantContract[],
+  payments: RentPayment[],
+  now: Date = new Date()
+): PropertyTenantPaymentState {
+  const currentPeriod = getCurrentPeriodMonth(now);
+  const prop = properties.find((p) => p.id === propertyId);
+
+  if (!prop || prop.property_type === 'EDIFICIO MATRIZ') {
+    return {
+      propertyId,
+      hasActiveContract: false,
+      contract: null,
+      cutoffDay: prop?.cutoff_day ?? 5,
+      activePeriod: currentPeriod,
+      agreedRentCop: 0,
+      alreadyCollectedCop: 0,
+      remainingBalanceCop: 0,
+      totalRemainingDebtCop: 0,
+      daysUntilCutoff: 0,
+      activationDateLabel: '',
+      cutoffDateLabel: '',
+      isCutoffWindowOpen: false,
+      isAlDia: true,
+      statusLabel: 'MATRIZ',
+      canPay: false,
+      periodBalances: [],
+      recentPayments: [],
+    };
+  }
+
+  const contract =
+    contracts.find(
+      (c) => c.property_id === propertyId && c.status !== 'FINALIZADO'
+    ) ?? null;
+
+  if (!contract || prop.status === 'DISPONIBLE') {
+    return {
+      propertyId,
+      hasActiveContract: false,
+      contract: null,
+      cutoffDay: prop.cutoff_day || 5,
+      activePeriod: currentPeriod,
+      agreedRentCop: prop.base_rent_cop,
+      alreadyCollectedCop: 0,
+      remainingBalanceCop: 0,
+      totalRemainingDebtCop: 0,
+      daysUntilCutoff: 0,
+      activationDateLabel: '',
+      cutoffDateLabel: '',
+      isCutoffWindowOpen: false,
+      isAlDia: true,
+      statusLabel: 'SIN INQUILINO',
+      canPay: false,
+      periodBalances: [],
+      recentPayments: [],
+    };
+  }
+
+  const cutoffDay = contract.cutoff_day || prop.cutoff_day || 5;
+  const todayMidnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+  const cutoffDate = new Date(now.getFullYear(), now.getMonth(), cutoffDay);
+  const activationDate = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    cutoffDay - 5
+  );
+  const daysUntilCutoff = Math.round(
+    (cutoffDate.getTime() - todayMidnight.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  const fmtDate = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  const cycleState = getContractBillingCycleState(
+    propertyId,
+    properties,
+    contracts,
+    payments,
+    now
+  );
+
+  const periodBalances: TenantPeriodBalanceSummary[] = [];
+  for (const p of cycleState.collectiblePeriods) {
+    const st = getPeriodCollectionStatus(
+      propertyId,
+      p,
+      properties,
+      contracts,
+      payments,
+      contract.id
+    );
+    const hasMoraRecord = payments.some(
+      (rp) =>
+        rp.property_id === propertyId &&
+        rp.period_month === p &&
+        rp.status === 'MORA'
+    );
+    const isPeriodWindowOpen =
+      p < currentPeriod ||
+      daysUntilCutoff <= 5 ||
+      st.alreadyCollectedCop > 0 ||
+      contract.status === 'MORA' ||
+      hasMoraRecord;
+
+    if (isPeriodWindowOpen) {
+      periodBalances.push({
+        periodMonth: p,
+        agreedRentCop: st.agreedRentCop,
+        alreadyCollectedCop: st.alreadyCollectedCop,
+        remainingBalanceCop: st.remainingBalanceCop,
+        isFullyPaid: st.isFullyPaid,
+      });
+    }
+  }
+
+  const totalRemainingDebtCop = periodBalances.reduce(
+    (sum, b) => sum + b.remainingBalanceCop,
+    0
+  );
+  const activeBalance =
+    periodBalances.find((b) => b.remainingBalanceCop > 0) ??
+    periodBalances[0] ?? {
+      periodMonth: currentPeriod,
+      agreedRentCop: contract.monthly_rent_cop || prop.base_rent_cop,
+      alreadyCollectedCop: 0,
+      remainingBalanceCop: 0,
+      isFullyPaid: true,
+    };
+
+  const isCutoffWindowOpen = periodBalances.length > 0;
+  const isAlDia = totalRemainingDebtCop === 0;
+  const canPay = isCutoffWindowOpen && totalRemainingDebtCop > 0;
+
+  const recentPayments = payments
+    .filter((rp) => rp.property_id === propertyId)
+    .sort((a, b) => b.id - a.id);
+
+  return {
+    propertyId,
+    hasActiveContract: true,
+    contract,
+    cutoffDay,
+    activePeriod: activeBalance.periodMonth,
+    agreedRentCop: activeBalance.agreedRentCop,
+    alreadyCollectedCop: activeBalance.alreadyCollectedCop,
+    remainingBalanceCop: activeBalance.remainingBalanceCop,
+    totalRemainingDebtCop,
+    daysUntilCutoff,
+    activationDateLabel: fmtDate(activationDate),
+    cutoffDateLabel: fmtDate(cutoffDate),
+    isCutoffWindowOpen,
+    isAlDia,
+    statusLabel: isAlDia ? 'AL DÍA' : 'MOROSO',
+    canPay,
+    periodBalances,
+    recentPayments,
   };
 }
 
@@ -1639,14 +1947,57 @@ class InmoRepositoryImpl {
       );
     }
 
+    const prop = this.state.properties.find((p) => p.id === input.property_id);
+    const primaryOwnerId = prop?.owner_id ?? 1;
+    const settlementPeriodMonth = resolveNextUnsettledCutoffPeriod(
+      primaryOwnerId,
+      input.period_month,
+      this.state.settlements
+    );
+
     const nextId =
       this.state.payments.reduce((max, rp) => Math.max(max, rp.id), 0) + 1;
+    const normalizedMethod = input.payment_method || 'TRANSACCIÓN';
     const payment: RentPayment = {
       id: nextId,
       ...input,
+      payment_method: normalizedMethod,
+      reference_code:
+        input.reference_code?.trim() ||
+        (normalizedMethod.toUpperCase().includes('EFECTIVO')
+          ? `REC-EFE-${nextId}`
+          : `REC-TRX-${nextId}`),
+      settlement_period_month: settlementPeriodMonth,
       gross_amount_cop: amount,
     };
     this.state.payments.push(payment);
+
+    if (
+      status.agreedRentCop > 0 &&
+      status.alreadyCollectedCop + amount >= status.agreedRentCop
+    ) {
+      for (const rp of this.state.payments) {
+        if (
+          rp.property_id === input.property_id &&
+          rp.period_month === input.period_month &&
+          rp.status === 'MORA'
+        ) {
+          rp.status = 'PENDIENTE';
+        }
+      }
+      if (contract && contract.status === 'MORA') {
+        const updatedState = getPropertyTenantPaymentState(
+          input.property_id,
+          this.state.properties,
+          this.state.contracts,
+          this.state.payments
+        );
+        if (updatedState.totalRemainingDebtCop === 0) {
+          contract.status = 'ACTIVO';
+        }
+      }
+    }
+
     this.persistState();
     return payment;
   }
@@ -1654,12 +2005,23 @@ class InmoRepositoryImpl {
   public createMaintenanceExpense(
     input: NewMaintenanceInput
   ): MaintenanceExpense {
+    const prop = this.state.properties.find((p) => p.id === input.property_id);
+    const primaryOwnerId = prop?.owner_id ?? 1;
+    const basePeriod =
+      input.execution_date?.slice(0, 7) || getCurrentPeriodMonth();
+    const settlementPeriodMonth = resolveNextUnsettledCutoffPeriod(
+      primaryOwnerId,
+      basePeriod,
+      this.state.settlements
+    );
+
     const nextId =
       this.state.maintenances.reduce((max, m) => Math.max(max, m.id), 0) + 1;
     const expense: MaintenanceExpense = {
       id: nextId,
       property_id: input.property_id,
       execution_date: input.execution_date,
+      settlement_period_month: settlementPeriodMonth,
       category: input.category,
       description: input.description,
       technician_name: input.technician_name,
@@ -1679,9 +2041,10 @@ class InmoRepositoryImpl {
 
   /**
    * Executes a transactional monthly settlement (`BEGIN TRANSACTION ... COMMIT`):
-   * - Calculates gross rent collected, mixed commission `(Gross * %) + Fixed Fee`, and 1:1 net maintenance deductions.
+   * - Verifies that `(ownerId, periodMonth)` has not already been approved to prevent duplicate historical records.
+   * - Calculates gross rent collected, percentage commission `(Gross * %)`, and 1:1 net maintenance deductions.
    * - Persists the settlement record with a SHA-256 seal.
-   * - Transitions all `Por Liquidar` maintenance expenses for this owner's properties to `Liquidado`.
+   * - Marks included rent payments and `Por Liquidar` maintenance expenses as settled for this owner.
    */
   public executeMonthlySettlement(
     ownerId: number,
@@ -1690,6 +2053,15 @@ class InmoRepositoryImpl {
     // Snapshot state for atomic rollback on any failure
     const snapshot = JSON.stringify(this.state);
     try {
+      const alreadyApproved = this.state.settlements.some(
+        (s) => s.owner_id === ownerId && s.period_month === periodMonth
+      );
+      if (alreadyApproved) {
+        throw new Error(
+          `Operación bloqueada: La liquidación del periodo ${periodMonth} ya fue aprobada y registrada en el historial.`
+        );
+      }
+
       const ownerProps = this.state.properties.filter(
         (p) => getOwnerSharePct(p, ownerId) > 0
       );
@@ -1711,7 +2083,8 @@ class InmoRepositoryImpl {
         ownerPayments,
         ownerMaintenances,
         periodMonth,
-        ownerContracts
+        ownerContracts,
+        this.state.settlements
       );
 
       const propById = new Map(ownerProps.map((p) => [p.id, p]));
@@ -1784,11 +2157,26 @@ class InmoRepositoryImpl {
 
       this.state.settlements.push(settlement);
 
+      for (const rp of this.state.payments) {
+        if (
+          ownerPropIds.has(rp.property_id) &&
+          (rp.settlement_period_month ?? rp.period_month) === periodMonth &&
+          rp.status === 'PAGADO'
+        ) {
+          const settledSet = new Set(rp.settled_owner_ids ?? []);
+          settledSet.add(ownerId);
+          rp.settled_owner_ids = Array.from(settledSet);
+          rp.settlement_id = settlement.id;
+        }
+      }
+
       for (const maint of this.state.maintenances) {
         if (
           ownerPropIds.has(maint.property_id) &&
           maint.deduction_status === 'Por Liquidar' &&
-          !maint.settled_owner_ids?.includes(ownerId)
+          !maint.settled_owner_ids?.includes(ownerId) &&
+          (!maint.settlement_period_month ||
+            maint.settlement_period_month <= periodMonth)
         ) {
           const settledSet = new Set(maint.settled_owner_ids ?? []);
           settledSet.add(ownerId);

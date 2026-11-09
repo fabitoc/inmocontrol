@@ -40,7 +40,7 @@ interface RegistroControlViewProps {
   onRecordPayment: (input: NewRentPaymentInput) => void;
 }
 
-type RegistroControlTab = 'propietario' | 'inmueble' | 'inquilino' | 'recaudo';
+type RegistroControlTab = 'propietario' | 'inmueble' | 'inquilino';
 
 const TABS: Array<{
   id: RegistroControlTab;
@@ -65,12 +65,6 @@ const TABS: Array<{
     code: '03',
     label: '03 // Vinculación de Inquilino',
     subtitle: 'TABLA: tenant_contracts · Pólizas y Arrendamiento',
-  },
-  {
-    id: 'recaudo',
-    code: '04',
-    label: '04 // Recaudo Mensual',
-    subtitle: 'TABLA: rent_payments · Libro Mayor de Abonos',
   },
 ];
 
@@ -177,9 +171,8 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
   const [contractPaymentPeriod, setContractPaymentPeriod] =
     useState<string>(currentSystemPeriod);
   const [contractPaymentMethod, setContractPaymentMethod] =
-    useState('TRANSFERENCIA PSE');
-  const [contractPaymentRef, setContractPaymentRef] =
-    useState('INGRESO-INQ-01');
+    useState('TRANSACCIÓN');
+  const [contractPaymentRef] = useState('INGRESO-INQ-01');
   const [startDate, setStartDate] = useState(
     `${currentSystemPeriod}-01`
   );
@@ -258,13 +251,6 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       }
     }
   }, [bundle.selected_owner.id, rentableProperties.length]);
-
-  // Focus Periodo Contable field when entering Tab 04 (Recaudo Mensual)
-  useEffect(() => {
-    if (activeTab === 'recaudo') {
-      paymentPeriodSelectRef.current?.focus();
-    }
-  }, [activeTab]);
 
   // Automatically sync active billing period and Valor Recaudado ($ COP) with the contract's registration date, cutoff date, and remaining period balance
   useEffect(() => {
@@ -2218,31 +2204,14 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                     Medio de Pago Inicial
                   </span>
                   <select
+                    data-testid="select-contract-payment-method"
                     value={contractPaymentMethod}
                     onChange={(e) => setContractPaymentMethod(e.target.value)}
                     className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                   >
-                    <option value="TRANSFERENCIA PSE">TRANSFERENCIA PSE</option>
-                    <option value="CONSIGNACIÓN BANCARIA">
-                      CONSIGNACIÓN BANCARIA
-                    </option>
-                    <option value="TRANSFERENCIA ACH">TRANSFERENCIA ACH</option>
-                    <option value="EFECTIVO EN OFICINA">
-                      EFECTIVO EN OFICINA
-                    </option>
+                    <option value="EFECTIVO">EFECTIVO</option>
+                    <option value="TRANSACCIÓN">TRANSACCIÓN</option>
                   </select>
-                </label>
-
-                <label className="block">
-                  <span className="text-[#9ca3af] uppercase block mb-1">
-                    Referencia Bancaria / Recibo
-                  </span>
-                  <input
-                    type="text"
-                    value={contractPaymentRef}
-                    onChange={(e) => setContractPaymentRef(e.target.value)}
-                    className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
-                  />
                 </label>
               </div>
 
@@ -2352,406 +2321,6 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                         {formatCop(contract.monthly_rent_cop)} (Día{' '}
                         {contract.cutoff_day})
                       </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB PANEL 04 // REGISTRO DE RECAUDO MENSUAL */}
-      {activeTab === 'recaudo' && (
-        <div
-          id="tabpanel-recaudo"
-          role="tabpanel"
-          aria-labelledby="tab-btn-recaudo"
-          data-testid="panel-recaudo"
-          className="grid grid-cols-1 xl:grid-cols-12 gap-6"
-        >
-          <form
-            noValidate
-            onSubmit={handlePaymentSubmit}
-            className="xl:col-span-6 bg-[#0d0e12] border border-[#292a2e] p-5 space-y-4 flex flex-col justify-between"
-          >
-            <div className="space-y-4">
-              <div className="border-b border-[#292a2e] pb-3 flex items-center justify-between">
-                <h3 className="text-sm font-mono font-bold uppercase tracking-wider text-[#00FF66]">
-                  04 // Registro de Recaudo Mensual
-                </h3>
-                <span className="text-xs font-mono text-[#9ca3af]">
-                  TABLA: rent_payments
-                </span>
-              </div>
-
-              <div className="space-y-3 text-xs font-mono">
-                <label className="block">
-                  <span className="text-[#9ca3af] uppercase block mb-1">
-                    Inmueble / Contrato a Recaudar
-                  </span>
-                  <select
-                    aria-label="Inmueble o Contrato Activo para Recaudo"
-                    data-testid="select-payment-property"
-                    value={paymentPropertyId}
-                    onChange={(e) =>
-                      setPaymentPropertyId(Number(e.target.value))
-                    }
-                    className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white font-bold"
-                  >
-                    {rentableProperties.map((prop) => {
-                      const contract =
-                        bundle.contracts.find(
-                          (c) =>
-                            c.property_id === prop.id &&
-                            c.status !== 'FINALIZADO'
-                        ) ??
-                        bundle.contracts.find((c) => c.property_id === prop.id);
-                      const agreedCop =
-                        contract && contract.monthly_rent_cop > 0
-                          ? contract.monthly_rent_cop
-                          : prop.base_rent_cop;
-                      const tenantLabel = contract
-                        ? contract.tenant_name
-                        : 'Canon Inmueble';
-                      return (
-                        <option key={prop.id} value={prop.id}>
-                          [{prop.code}] {prop.title} — {tenantLabel} (Pactado:{' '}
-                          {formatCop(agreedCop)})
-                        </option>
-                      );
-                    })}
-                  </select>
-                </label>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="block">
-                    <span className="text-[#00eefc] uppercase font-bold block mb-1">
-                      Periodo Contable Activo (Por Fecha de Corte)
-                    </span>
-                    <select
-                      ref={paymentPeriodSelectRef}
-                      autoFocus
-                      aria-label="Periodo Contable de Recaudo"
-                      data-testid="select-payment-period"
-                      value={paymentPeriod}
-                      onChange={(e) => setPaymentPeriod(e.target.value)}
-                      className="w-full bg-[#1a1b20] border-2 border-[#00eefc] px-3 py-2 text-white font-bold focus:outline-none focus:ring-2 focus:ring-[#00eefc]/60"
-                    >
-                      {activeBillingCycle.collectiblePeriods.map((period) => (
-                        <option key={period} value={period}>
-                          {formatPeriodMonthLabel(period, currentSystemPeriod)}
-                        </option>
-                      ))}
-                    </select>
-                    <span
-                      data-testid="payment-cutoff-cycle-info"
-                      className="text-[11px] text-[#9ca3af] mt-1 block"
-                    >
-                      Registro Inquilino:{' '}
-                      <strong className="text-white">
-                        {activeBillingCycle.registrationDate}
-                      </strong>{' '}
-                      · Corte: Día {activeBillingCycle.cutoffDay} · Próximo (
-                      {activeBillingCycle.nextPeriod}) se activa el{' '}
-                      <strong className="text-[#ffb800]">
-                        {activeBillingCycle.nextCutoffDate}
-                      </strong>
-                    </span>
-                  </label>
-
-                  <label className="block">
-                    <span className="text-[#9ca3af] uppercase block mb-1">
-                      Valor Recaudado / Abono ($ COP)
-                    </span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={
-                        periodCollectionStatus.agreedRentCop > 0
-                          ? periodCollectionStatus.remainingBalanceCop
-                          : undefined
-                      }
-                      data-testid="input-payment-amount-cop"
-                      value={paymentAmountCop}
-                      onChange={(e) => {
-                        setPaymentAmountCop(Number(e.target.value));
-                        setPaymentError(null);
-                      }}
-                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white font-bold"
-                    />
-                    <span
-                      data-testid="payment-amount-words"
-                      className="text-[11px] text-[#00FF66] mt-1 block"
-                    >
-                      {formatCop(paymentAmountCop)} —{' '}
-                      {formatCopInWords(paymentAmountCop)}
-                    </span>
-                  </label>
-                </div>
-
-                {/* Period Quota & Balance Guardrail Box */}
-                <div
-                  data-testid="period-collection-status-box"
-                  className="bg-[#14151a] border border-[#292a2e] p-3 grid grid-cols-3 gap-2 text-[11px]"
-                >
-                  <div>
-                    <span className="text-[#9ca3af] block uppercase">
-                      Valor Pactado:
-                    </span>
-                    <span
-                      data-testid="payment-agreed-rent-cop"
-                      className="text-white font-bold"
-                    >
-                      {formatCop(periodCollectionStatus.agreedRentCop)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[#9ca3af] block uppercase">
-                      Abonado ({paymentPeriod}):
-                    </span>
-                    <span
-                      data-testid="payment-already-collected-cop"
-                      className="text-[#00eefc] font-bold"
-                    >
-                      {formatCop(periodCollectionStatus.alreadyCollectedCop)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[#9ca3af] block uppercase">
-                      Saldo Pendiente:
-                    </span>
-                    <span
-                      data-testid="payment-remaining-balance-cop"
-                      className={
-                        periodCollectionStatus.remainingBalanceCop === 0
-                          ? 'text-[#00FF66] font-bold'
-                          : 'text-[#ffb800] font-bold'
-                      }
-                    >
-                      {formatCop(periodCollectionStatus.remainingBalanceCop)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="block">
-                    <span className="text-[#9ca3af] uppercase block mb-1">
-                      Medio de Pago
-                    </span>
-                    <select
-                      value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value)}
-                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
-                    >
-                      <option value="TRANSFERENCIA PSE">
-                        TRANSFERENCIA PSE
-                      </option>
-                      <option value="CONSIGNACIÓN BANCARIA">
-                        CONSIGNACIÓN BANCARIA
-                      </option>
-                      <option value="TRANSFERENCIA ACH">
-                        TRANSFERENCIA ACH
-                      </option>
-                    </select>
-                  </label>
-
-                  <label className="block">
-                    <span className="text-[#9ca3af] uppercase block mb-1">
-                      Referencia Bancaria
-                    </span>
-                    <input
-                      type="text"
-                      value={paymentRef}
-                      onChange={(e) => setPaymentRef(e.target.value)}
-                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
-                    />
-                  </label>
-                </div>
-
-                {activePaymentProperty &&
-                  (activePaymentOwnerSharePct < 100 ||
-                    (activePaymentProperty.co_owners &&
-                      activePaymentProperty.co_owners.length > 1)) && (
-                    <div
-                      data-testid="payment-coowner-dividend-box"
-                      className="bg-[#121317] border border-[#ffb800]/50 p-3 space-y-2"
-                    >
-                      <div className="flex items-center justify-between border-b border-[#292a2e] pb-1.5">
-                        <span className="text-[11px] text-[#ffb800] font-bold uppercase">
-                          DISTRIBUCIÓN DE DIVIDENDOS POR COPROPIEDAD
-                        </span>
-                        <span className="text-[11px] text-[#00eefc] font-bold">
-                          [{activePaymentProperty.code}]
-                        </span>
-                      </div>
-                      <div className="space-y-1">
-                        {resolvePropertyCoOwnerShares(
-                          activePaymentProperty
-                        ).map((co) => {
-                          const ownerName =
-                            bundle.all_owners.find((o) => o.id === co.owner_id)
-                              ?.name ?? `Propietario #${co.owner_id}`;
-                          const isCurrent =
-                            co.owner_id === bundle.selected_owner.id;
-                          const dividendCop = Math.round(
-                            Number(paymentAmountCop || 0) * (co.share_pct / 100)
-                          );
-                          return (
-                            <div
-                              key={co.owner_id}
-                              className="flex items-center justify-between text-[11px]"
-                            >
-                              <span
-                                className={
-                                  isCurrent
-                                    ? 'text-white font-bold'
-                                    : 'text-[#9ca3af]'
-                                }
-                              >
-                                {ownerName} ({co.share_pct}%)
-                                {isCurrent ? ' [ACTIVO]' : ''}
-                              </span>
-                              <span
-                                className={
-                                  isCurrent
-                                    ? 'text-[#00FF66] font-bold'
-                                    : 'text-[#e3e2e7]'
-                                }
-                              >
-                                {formatCop(dividendCop)}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-              </div>
-
-              {paymentError && (
-                <div
-                  data-testid="payment-error-feedback"
-                  className="p-2.5 bg-[#ff007f]/15 border border-[#ff007f] text-xs font-mono text-[#ff007f] font-bold"
-                >
-                  {paymentError}
-                </div>
-              )}
-
-              {paymentFeedback && (
-                <div
-                  data-testid="payment-success-feedback"
-                  className="p-2.5 bg-[#00FF66]/10 border border-[#00FF66]/40 text-xs font-mono text-[#00FF66]"
-                >
-                  {paymentFeedback}
-                </div>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-2.5 bg-[#1a1b20] border border-[#00FF66] text-[#00FF66] font-mono font-bold text-xs uppercase tracking-wider hover:bg-[#00FF66]/10"
-            >
-              [ REGISTRAR ABONO EN LIBRO MAYOR ]
-            </button>
-          </form>
-
-          {/* Context Column: Historial Reciente de Recaudos */}
-          <div className="xl:col-span-6 bg-[#0d0e12] border border-[#292a2e] p-5 space-y-4">
-            <div className="border-b border-[#292a2e] pb-3 flex items-center justify-between">
-              <h3 className="text-sm font-mono font-bold uppercase tracking-wider text-white">
-                Historial Reciente de Recaudos
-              </h3>
-              <span className="text-xs font-mono text-[#00FF66]">
-                REGISTROS: {bundle.payments.length}
-              </span>
-            </div>
-
-            <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
-              {bundle.payments.map((payment) => {
-                const payProp = bundle.properties.find(
-                  (p) => p.id === payment.property_id
-                );
-                const paySharePct = payProp
-                  ? getOwnerSharePct(payProp, bundle.selected_owner.id)
-                  : 100;
-                const ownerDividendCop = Math.round(
-                  payment.gross_amount_cop * (paySharePct / 100)
-                );
-                const payStatus = getPeriodCollectionStatus(
-                  payment.property_id,
-                  payment.period_month,
-                  bundle.properties,
-                  bundle.contracts,
-                  bundle.payments,
-                  payment.contract_id
-                );
-                const isPartial =
-                  payStatus.agreedRentCop > 0 &&
-                  payment.gross_amount_cop < payStatus.agreedRentCop;
-                return (
-                  <div
-                    key={payment.id}
-                    data-testid={`payment-history-item-${payment.id}`}
-                    className="p-3 bg-[#14151a] border border-[#292a2e] font-mono text-xs flex items-center justify-between gap-3"
-                  >
-                    <div className="space-y-0.5">
-                      <div className="text-[#00eefc] font-bold">
-                        {payProp
-                          ? `[${payProp.code}] ${payProp.title}`
-                          : `Inmueble #${payment.property_id}`}
-                      </div>
-                      <div className="text-white font-bold">
-                        PERIODO: {payment.period_month} · REF:{' '}
-                        {payment.reference_code}
-                      </div>
-                      <div className="text-[#9ca3af]">
-                        {payment.payment_method} · FECHA: {payment.payment_date}
-                      </div>
-                      <div className="text-[11px] text-[#9ca3af]">
-                        Pactado: {formatCop(payStatus.agreedRentCop)} ·
-                        Acumulado Periodo:{' '}
-                        {formatCop(payStatus.alreadyCollectedCop)} · Saldo:{' '}
-                        <span
-                          className={
-                            payStatus.remainingBalanceCop > 0
-                              ? 'text-[#ffb800] font-bold'
-                              : 'text-[#00FF66] font-bold'
-                          }
-                        >
-                          {formatCop(payStatus.remainingBalanceCop)}
-                        </span>
-                      </div>
-                      {paySharePct < 100 && (
-                        <div className="text-[11px] text-[#ffb800]">
-                          Dividendo ({paySharePct}%):{' '}
-                          {formatCop(ownerDividendCop)} (Total unidad:{' '}
-                          {formatCop(payment.gross_amount_cop)})
-                        </div>
-                      )}
-                    </div>
-                    <div className="text-right space-y-1 shrink-0">
-                      <div className="text-[#00FF66] font-bold">
-                        {formatCop(
-                          paySharePct < 100
-                            ? ownerDividendCop
-                            : payment.gross_amount_cop
-                        )}
-                      </div>
-                      <div className="flex flex-col items-end gap-1">
-                        <span
-                          className={`text-[10px] px-1.5 py-0.5 border font-bold ${
-                            isPartial
-                              ? 'border-[#ffb800] bg-[#ffb800]/15 text-[#ffb800]'
-                              : 'border-[#00FF66]/40 text-[#00FF66]'
-                          }`}
-                        >
-                          {isPartial ? '[ABONO PARCIAL]' : '[PAGO COMPLETO]'}
-                        </span>
-                        <span className="text-[10px] px-1.5 py-0.5 border border-[#00FF66]/40 text-[#00FF66]">
-                          [{payment.status}]
-                        </span>
-                      </div>
                     </div>
                   </div>
                 );

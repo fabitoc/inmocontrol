@@ -105,11 +105,14 @@ export interface RentPayment {
   contract_id: number;
   property_id: number;
   period_month: string;
+  settlement_period_month?: string;
   gross_amount_cop: number;
   payment_date: string;
   payment_method: string;
   reference_code: string;
   status: PaymentStatus;
+  settlement_id?: number | null;
+  settled_owner_ids?: number[];
 }
 
 export interface NewRentPaymentInput {
@@ -119,7 +122,7 @@ export interface NewRentPaymentInput {
   gross_amount_cop: number;
   payment_date: string;
   payment_method: string;
-  reference_code: string;
+  reference_code?: string;
   status: PaymentStatus;
 }
 
@@ -129,6 +132,7 @@ export interface MaintenanceExpense {
   id: number;
   property_id: number;
   execution_date: string;
+  settlement_period_month?: string;
   category: string;
   description: string;
   technician_name: string;

@@ -8,7 +8,9 @@ import {
   formatPeriodMonthLabel,
   getAccountingPeriodOptions,
   getCurrentPeriodMonth,
+  getNextPeriodMonth,
   getOwnerSharePct,
+  resolveActiveSettlementPeriodForOwner,
 } from '../../services/inmoService';
 import {
   buildInvoiceFromHistoricalSettlement,
@@ -28,20 +30,17 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
   const currentSystemPeriod = getCurrentPeriodMonth();
   const availablePeriods = getAccountingPeriodOptions(
     bundle.payments,
-    bundle.settlements
+    bundle.settlements,
+    new Date(),
+    bundle.maintenances
   );
-  const resolveInitialPeriod = () => {
-    const hasCurrentMonthPaid = bundle.payments.some(
-      (rp) =>
-        rp.period_month === currentSystemPeriod && rp.status === 'PAGADO'
+  const resolveInitialPeriod = () =>
+    resolveActiveSettlementPeriodForOwner(
+      bundle.selected_owner.id,
+      bundle.payments,
+      bundle.maintenances,
+      bundle.settlements
     );
-    if (hasCurrentMonthPaid) return currentSystemPeriod;
-    const latestPaid = bundle.payments
-      .filter((rp) => rp.status === 'PAGADO')
-      .map((rp) => rp.period_month)
-      .sort((a, b) => b.localeCompare(a))[0];
-    return latestPaid || currentSystemPeriod;
-  };
 
   const [viewMode, setViewMode] = useState<'ACTIVA' | 'HISTORIAL'>('ACTIVA');
   const [periodMonth, setPeriodMonth] = useState<string>(resolveInitialPeriod);
@@ -60,7 +59,21 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
     setSettlementFeedback(null);
     setPdfFeedback(null);
     setPeriodMonth(resolveInitialPeriod());
-  }, [bundle.selected_owner.id, bundle.payments.length]);
+  }, [
+    bundle.selected_owner.id,
+    bundle.payments.length,
+    bundle.maintenances.length,
+  ]);
+
+  const isPeriodAlreadyApproved = bundle.settlements.some(
+    (s) =>
+      s.owner_id === bundle.selected_owner.id && s.period_month === periodMonth
+  );
+  const ownerCutoffDay =
+    bundle.selected_owner.cutoff_day ??
+    bundle.properties[0]?.cutoff_day ??
+    5;
+  const nextCutoffPeriod = getNextPeriodMonth(periodMonth);
 
   const preview = calculateOwnerSettlementPreview(
     bundle.selected_owner.id,
@@ -68,7 +81,8 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
     bundle.payments,
     bundle.maintenances,
     periodMonth,
-    bundle.contracts
+    bundle.contracts,
+    bundle.settlements
   );
 
   const weeklySeries = buildWeeklyTelemetrySeries(bundle);
@@ -86,9 +100,15 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
     'evidencias/sin_soporte_pendiente.jpg';
 
   const handleApproveSettlement = () => {
+    if (isPeriodAlreadyApproved) {
+      setSettlementFeedback(
+        `Operación bloqueada: La liquidación del periodo ${periodMonth} ya fue aprobada previamente y consta en el Historial. Los nuevos movimientos se liquidan en el siguiente corte (${nextCutoffPeriod}).`
+      );
+      return;
+    }
     onExecuteSettlement(bundle.selected_owner.id, periodMonth);
     setSettlementFeedback(
-      `BEGIN TRANSACTION ... COMMIT completado: Liquidación ${periodMonth} sellada para ${bundle.selected_owner.name} por ${formatCop(preview.netPayableCop)}. Mantenimientos actualizados a [Liquidado] y registrada en Historial.`
+      `BEGIN TRANSACTION ... COMMIT completado: Liquidación ${periodMonth} sellada para ${bundle.selected_owner.name} por ${formatCop(preview.netPayableCop)}. Mantenimientos actualizados a [Liquidado] y registrada en Historial. Los movimientos posteriores pasan automáticamente al corte ${nextCutoffPeriod}.`
     );
   };
 
@@ -148,6 +168,15 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
             Cruce automático de recaudos por copropiedad menos comisión
             porcentual `(Bruto × %)` menos mantenimientos netos `1:1`.
           </p>
+          <div
+            className="mt-1.5 text-[11px] font-mono text-[#00eefc]"
+            data-testid="automatic-cutoff-banner"
+          >
+            CIERRE AUTOMÁTICO DE SISTEMA: Corte Día {ownerCutoffDay} ·{' '}
+            {isPeriodAlreadyApproved
+              ? `Periodo ${periodMonth} APROBADO → Nuevos movimientos pasan al corte ${nextCutoffPeriod}`
+              : `Capturando en tiempo real recaudos, abonos, comisiones y mantenimientos del periodo ${periodMonth}`}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
@@ -1090,10 +1119,17 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                 <button
                   type="button"
                   data-testid="approve-settlement-button"
+                  disabled={isPeriodAlreadyApproved}
                   onClick={handleApproveSettlement}
-                  className="w-full py-3 px-4 bg-[#00eefc] text-[#0d0e12] font-mono font-bold text-xs uppercase tracking-wider hover:bg-[#00eefc]/90"
+                  className={`w-full py-3 px-4 font-mono font-bold text-xs uppercase tracking-wider transition-colors ${
+                    isPeriodAlreadyApproved
+                      ? 'bg-[#292a2e] border border-[#00FF66]/40 text-[#00FF66] cursor-not-allowed'
+                      : 'bg-[#00eefc] text-[#0d0e12] hover:bg-[#00eefc]/90'
+                  }`}
                 >
-                  [ APROBAR // EJECUTAR ]
+                  {isPeriodAlreadyApproved
+                    ? '[ LIQUIDACIÓN YA APROBADA // EN HISTORIAL ]'
+                    : '[ APROBAR // EJECUTAR ]'}
                 </button>
               </div>
             </div>
