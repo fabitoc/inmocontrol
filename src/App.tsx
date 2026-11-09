@@ -260,6 +260,7 @@ export const App: React.FC = () => {
               <AdministracionAlertasView
                 bundle={bundle}
                 onExecuteHandover={handleExecuteHandover}
+                onRecordPayment={handleRecordPayment}
               />
             )}
 

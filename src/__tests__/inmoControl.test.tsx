@@ -195,8 +195,8 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     expect(screen.getByTestId('panel-inquilino')).toBeInTheDocument();
     expect(screen.queryByTestId('panel-recaudo')).not.toBeInTheDocument();
 
-    // Return to Dashboard and open 04 // Registro de Recaudo Mensual modal via [ PAGAR ] button
-    fireEvent.click(screen.getByTestId('nav-dashboard-analitico'));
+    // Navigate to Administración and open 04 // Registro de Recaudo Mensual modal via [ PAGAR ] button
+    fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
     fireEvent.click(screen.getByTestId('dashboard-pay-button-2'));
     expect(screen.getByTestId('payment-modal-dialog')).toBeInTheDocument();
     expect(screen.getByTestId('panel-recaudo')).toBeInTheDocument();
@@ -379,8 +379,8 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       '$2.000 — Dos mil pesos'
     );
 
-    // Dashboard [ PAGAR ] Modal -> 04 // Registro de Recaudo Mensual
-    fireEvent.click(screen.getByTestId('nav-dashboard-analitico'));
+    // Administración [ PAGAR ] Modal -> 04 // Registro de Recaudo Mensual
+    fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
     fireEvent.click(screen.getByTestId('dashboard-pay-button-2'));
     const paymentAmountInput = screen.getByTestId('input-payment-amount-cop');
     fireEvent.change(paymentAmountInput, { target: { value: '2000' } });
@@ -561,9 +561,11 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     );
   });
 
-  it('opens 04 // Registro de Recaudo Mensual from Dashboard [ PAGAR ] button, restricts payment methods to EFECTIVO and TRANSACCIÓN without bank reference, keeps [ PAGAR ] enabled across partial abonos, and disables it once AL DÍA', () => {
+  it('opens 04 // Registro de Recaudo Mensual from Administración [ PAGAR ] button, restricts payment methods to EFECTIVO and TRANSACCIÓN without bank reference, keeps [ PAGAR ] enabled across partial abonos, and disables it once AL DÍA', () => {
     const currentMonth = getCurrentPeriodMonth();
     render(<App />);
+
+    fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
 
     // Verify occupancy badges ([OCUPADO] / [DISPONIBLE]) are rendered in ACTIVO / JERARQUÍA and ESTADO shows [MOROSO] / [AL DÍA]
     expect(screen.getByTestId('dashboard-occupancy-badge-2')).toHaveTextContent(
@@ -714,8 +716,8 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       /Abono Inicial \(\$650\.000 · Saldo pendiente.*\$800\.000\)/i
     );
 
-    // Return to Dashboard and open [ PAGAR ] modal for Property 3 to verify $650.000 collected and $800.000 remaining
-    fireEvent.click(screen.getByTestId('nav-dashboard-analitico'));
+    // Navigate to Administración and open [ PAGAR ] modal for Property 3 to verify $650.000 collected and $800.000 remaining
+    fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
     expect(screen.getByTestId('dashboard-pay-button-3')).not.toBeDisabled();
     fireEvent.click(screen.getByTestId('dashboard-pay-button-3'));
 
@@ -793,6 +795,8 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     const currentMonth = getCurrentPeriodMonth();
     render(<App />);
 
+    fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
+
     // Open [ PAGAR ] modal on Property 5 (Bodega Logística Sabana, which owes 2026-10 in MORA and currentMonth)
     fireEvent.click(screen.getByTestId('dashboard-pay-button-5'));
     expect(screen.getByTestId('payment-modal-dialog')).toBeInTheDocument();
@@ -866,5 +870,67 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     expect(currPdf).toContain(
       `SALDOS EN MORA ACTIVOS REPORTADOS EN PERIODO DE LIQUIDACION ACTUAL \\(${currentMonth}\\)`
     );
+  });
+
+  it('adds "Otra:" to Categoría Técnica in Mantenimientos, renders Panel de Alertas Inteligentes in Dashboard (mora, delayed settlements, upcoming settlements, upcoming collections), and renders Matriz de Activos with accordion toggle in Administración', () => {
+    render(<App />);
+
+    // 1. Dashboard shows Panel de Alertas Inteligentes (Tiempo Real) with all 4 indicator categories
+    expect(
+      screen.getByTestId('dashboard-smart-alerts-panel')
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('alert-summary-mora')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('alert-summary-liquidacion-retrasada')
+    ).toHaveTextContent(/1 retrasada\(s\)/i);
+    expect(
+      screen.getByTestId('alert-summary-proxima-liquidacion')
+    ).toHaveTextContent(/1 programada\(s\)/i);
+    expect(
+      screen.getByTestId('alert-summary-proximo-cobro')
+    ).toBeInTheDocument();
+
+    // Verify Matriz de Activos table is no longer in Dashboard
+    expect(
+      screen.queryByTestId('admin-property-matrix-accordion')
+    ).not.toBeInTheDocument();
+
+    // 2. Navigate to Module 4 (Administración) and verify Matriz de Activos has accordion expand/collapse and Árbol de Directorio is gone
+    fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
+    expect(
+      screen.getByTestId('admin-property-matrix-accordion')
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Árbol de Directorio de Inmuebles/i)
+    ).not.toBeInTheDocument();
+
+    // Accordion toggle on root property 1 collapses and expands sub-units (2, 3, 4)
+    expect(screen.getByTestId('admin-matrix-row-2')).toBeInTheDocument();
+    const toggleProp1 = screen.getByTestId('accordion-toggle-1');
+    expect(toggleProp1).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggleProp1);
+    expect(toggleProp1).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('admin-matrix-row-2')).not.toBeInTheDocument();
+    fireEvent.click(toggleProp1);
+    expect(screen.getByTestId('admin-matrix-row-2')).toBeInTheDocument();
+
+    // 3. Navigate to Module 3 (Mantenimientos) and verify "Otra:" option in Categoría Técnica
+    fireEvent.click(screen.getByTestId('nav-mantenimientos'));
+    const categorySelect = screen.getByTestId(
+      'select-maintenance-category'
+    ) as HTMLSelectElement;
+    const categoryOptions = Array.from(categorySelect.options).map(
+      (o) => o.text
+    );
+    expect(categoryOptions).toContain('Otra:');
+
+    fireEvent.change(categorySelect, { target: { value: 'OTRA' } });
+    const customCatInput = screen.getByTestId(
+      'input-custom-maintenance-category'
+    );
+    expect(customCatInput).toBeInTheDocument();
+    fireEvent.change(customCatInput, {
+      target: { value: 'Ascensor y Domótica' },
+    });
   });
 });

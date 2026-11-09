@@ -1046,61 +1046,173 @@ export function getPropertyTenantPaymentState(
 }
 
 /**
- * Builds Smart Alerts for Module 4 (`Administración y Alertas`) scoped to the selected owner.
- */
-export function buildSmartAlerts(bundle: OwnerDashboardBundle): SmartAlert[] {
+  * Builds Real-Time Smart Alerts for the Dashboard (`DashboardAnaliticoView`) scoped to the selected owner:
+  * 1. Moras de los inquilinos (`EN_MORA`)
+  * 2. Liquidaciones retrasadas por aprobar (`LIQUIDACION_RETRASADA`)
+  * 3. Próximas liquidaciones a ejecutar (`PROXIMA_LIQUIDACION`)
+  * 4. Próximos cobros (`PROXIMO_COBRO`)
+  */
+export function buildSmartAlerts(
+  bundle: OwnerDashboardBundle,
+  now: Date = new Date()
+): SmartAlert[] {
   const alerts: SmartAlert[] = [];
+  const currentPeriod = getCurrentPeriodMonth(now);
+  const nextPeriod = getNextPeriodMonth(currentPeriod);
+  const ownerCutoffDay = bundle.selected_owner.cutoff_day ?? 5;
   const propMap = new Map(bundle.properties.map((p) => [p.id, p]));
 
+  // 1. Moras de los inquilinos (EN_MORA)
   for (const contract of bundle.contracts) {
+    if (contract.status === 'FINALIZADO') continue;
     const prop = propMap.get(contract.property_id);
     if (!prop) continue;
 
-    if (contract.status === 'MORA') {
+    const paymentState = getPropertyTenantPaymentState(
+      prop.id,
+      bundle.properties,
+      bundle.contracts,
+      bundle.payments,
+      now
+    );
+
+    const owedBalances = paymentState.periodBalances.filter(
+      (b) => b.remainingBalanceCop > 0
+    );
+
+    if (contract.status === 'MORA' || !paymentState.isAlDia) {
+      const owedPeriodsLabel =
+        owedBalances.length > 0
+          ? owedBalances.map((b) => b.periodMonth).join(', ')
+          : currentPeriod;
+      const moraAmount =
+        paymentState.totalRemainingDebtCop > 0
+          ? paymentState.totalRemainingDebtCop
+          : contract.monthly_rent_cop;
+
       alerts.push({
         id: `mora-${contract.id}`,
         type: 'EN_MORA',
         severity: 'MAGENTA',
-        title: `${contract.tenant_name} — ${prop.title}`,
-        subtitle: `Incumplimiento respecto a fecha de corte (Día ${contract.cutoff_day}) · ${contract.phone}`,
-        amount_cop: contract.monthly_rent_cop,
-        cutoff_label: `CORTE DÍA ${contract.cutoff_day} // EN MORA`,
+        title: `Mora de Inquilino: ${contract.tenant_name} — ${prop.title}`,
+        subtitle: `Saldo en mora (${owedPeriodsLabel}) · Corte Día ${contract.cutoff_day} · Tel: ${contract.phone}`,
+        amount_cop: moraAmount,
+        cutoff_label: `MORA INQUILINO // CORTE DÍA ${contract.cutoff_day}`,
         property_id: prop.id,
-      });
-    } else if (contract.status === 'ACTIVO') {
-      alerts.push({
-        id: `cobro-${contract.id}`,
-        type: 'PROXIMO_COBRO',
-        severity: 'AMBER',
-        title: `${contract.tenant_name} — ${prop.title}`,
-        subtitle: `Próximo cobro programado · Codeudor: ${contract.guarantor_name}`,
-        amount_cop: contract.monthly_rent_cop,
-        cutoff_label: `VENCE DÍA ${contract.cutoff_day} DEL MES`,
-        property_id: prop.id,
+        period_month: owedBalances[0]?.periodMonth ?? currentPeriod,
       });
     }
   }
 
-  const preview = calculateOwnerSettlementPreview(
+  // 2. Liquidaciones retrasadas por aprobar (LIQUIDACION_RETRASADA)
+  const candidatePeriods = Array.from(
+    new Set([
+      currentPeriod,
+      '2026-10',
+      ...bundle.payments.map(
+        (rp) => rp.settlement_period_month ?? rp.period_month
+      ),
+      ...bundle.maintenances
+        .map((m) => m.settlement_period_month ?? m.execution_date.slice(0, 7))
+        .filter(Boolean),
+    ])
+  ).sort((a, b) => b.localeCompare(a));
+
+  for (const period of candidatePeriods) {
+    if (period >= currentPeriod) continue;
+
+    const alreadySettled = bundle.settlements.some(
+      (s) => s.period_month === period
+    );
+    if (alreadySettled) continue;
+
+    const preview = calculateOwnerSettlementPreview(
+      bundle.selected_owner.id,
+      bundle.properties,
+      bundle.payments,
+      bundle.maintenances,
+      period,
+      bundle.contracts,
+      bundle.settlements
+    );
+
+    if (preview.grossIncomeCop > 0 || preview.maintenanceDeductionCop > 0) {
+      alerts.push({
+        id: `liq-retrasada-${bundle.selected_owner.id}-${period}`,
+        type: 'LIQUIDACION_RETRASADA',
+        severity: 'MAGENTA',
+        title: `Liquidación Retrasada por Aprobar (${period}) — ${bundle.selected_owner.name}`,
+        subtitle: `Corte vencido (Día ${ownerCutoffDay}) · Recaudo: ${formatCop(preview.grossIncomeCop)} · ${preview.pendingMaintenances.length} mant. por descontar · ${bundle.selected_owner.bank_name}`,
+        amount_cop: preview.netPayableCop,
+        cutoff_label: `LIQUIDACIÓN RETRASADA POR APROBAR // ${period}`,
+        period_month: period,
+      });
+    }
+  }
+
+  // 3. Próximas liquidaciones a ejecutar (PROXIMA_LIQUIDACION)
+  const currentAlreadySettled = bundle.settlements.some(
+    (s) => s.period_month === currentPeriod
+  );
+  const upcomingSettlementPeriod = currentAlreadySettled
+    ? nextPeriod
+    : currentPeriod;
+  const upcomingPreview = calculateOwnerSettlementPreview(
     bundle.selected_owner.id,
     bundle.properties,
     bundle.payments,
     bundle.maintenances,
-    '2026-10'
+    upcomingSettlementPeriod,
+    bundle.contracts,
+    bundle.settlements
   );
-  const alreadySettledOct = bundle.settlements.some(
-    (s) => s.period_month === '2026-10'
-  );
+  const upcomingCutoffDate = `${upcomingSettlementPeriod}-${String(ownerCutoffDay).padStart(2, '0')}`;
 
-  if (!alreadySettledOct && preview.grossIncomeCop > 0) {
+  alerts.push({
+    id: `liq-proxima-${bundle.selected_owner.id}-${upcomingSettlementPeriod}`,
+    type: 'PROXIMA_LIQUIDACION',
+    severity: 'CYAN',
+    title: `Próxima Liquidación a Ejecutar (${upcomingSettlementPeriod}) — ${bundle.selected_owner.name}`,
+    subtitle: `Fecha de cierre automático: ${upcomingCutoffDate} (Día ${ownerCutoffDay}) · Recaudo acumulado: ${formatCop(upcomingPreview.grossIncomeCop)} · Dispersión: ${bundle.selected_owner.bank_name} (${bundle.selected_owner.bank_account_number})`,
+    amount_cop:
+      upcomingPreview.netPayableCop > 0
+        ? upcomingPreview.netPayableCop
+        : bundle.expected_monthly_collection_cop,
+    cutoff_label: `PRÓXIMA LIQUIDACIÓN A EJECUTAR // CORTE DÍA ${ownerCutoffDay} (${upcomingSettlementPeriod})`,
+    period_month: upcomingSettlementPeriod,
+  });
+
+  // 4. Próximos cobros (PROXIMO_COBRO)
+  for (const contract of bundle.contracts) {
+    if (contract.status === 'FINALIZADO') continue;
+    const prop = propMap.get(contract.property_id);
+    if (!prop) continue;
+
+    const currentStatus = getPeriodCollectionStatus(
+      prop.id,
+      currentPeriod,
+      bundle.properties,
+      bundle.contracts,
+      bundle.payments,
+      contract.id
+    );
+    const targetCobroPeriod = currentStatus.isFullyPaid
+      ? nextPeriod
+      : currentPeriod;
+    const targetCobroAmount = currentStatus.isFullyPaid
+      ? contract.monthly_rent_cop
+      : currentStatus.remainingBalanceCop;
+
     alerts.push({
-      id: `liq-owner-${bundle.selected_owner.id}`,
-      type: 'PENDIENTE_LIQUIDACION',
-      severity: 'CYAN',
-      title: `Liquidación Mensual 2026-10 — ${bundle.selected_owner.name}`,
-      subtitle: `${bundle.selected_owner.bank_name} (${bundle.selected_owner.bank_account_type}) · Cta ${bundle.selected_owner.bank_account_number}`,
-      amount_cop: preview.netPayableCop,
-      cutoff_label: `PENDIENTE DISPERSIÓN // ${preview.pendingMaintenances.length} MANT. POR LIQUIDAR`,
+      id: `cobro-${contract.id}`,
+      type: 'PROXIMO_COBRO',
+      severity: 'AMBER',
+      title: `Próximo Cobro: ${contract.tenant_name} — ${prop.title}`,
+      subtitle: `Periodo ${targetCobroPeriod} (Vence Día ${contract.cutoff_day} · Botón pagar activo 5 días antes) · Codeudor: ${contract.guarantor_name}`,
+      amount_cop: targetCobroAmount,
+      cutoff_label: `PRÓXIMO COBRO // VENCE DÍA ${contract.cutoff_day} (${targetCobroPeriod})`,
+      property_id: prop.id,
+      period_month: targetCobroPeriod,
     });
   }
 

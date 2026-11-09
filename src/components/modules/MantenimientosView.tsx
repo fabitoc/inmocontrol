@@ -29,6 +29,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
   );
   const [executionDate, setExecutionDate] = useState('2026-10-15');
   const [category, setCategory] = useState('PLOMERÍA HIDRÁULICA');
+  const [customCategory, setCustomCategory] = useState('');
   const [description, setDescription] = useState('');
   const [technicianName, setTechnicianName] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
@@ -73,10 +74,17 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
       normalizeEvidencePath(f)
     );
 
+    const resolvedCategory =
+      category === 'OTRA'
+        ? customCategory.trim()
+          ? `OTRA: ${customCategory.trim().toUpperCase()}`
+          : 'OTRA'
+        : category;
+
     onCreateMaintenance({
       property_id: Number(propertyId),
       execution_date: executionDate,
-      category,
+      category: resolvedCategory,
       description: description.trim(),
       technician_name: technicianName.trim() || 'Contratista Autorizado Agencia',
       invoice_number: invoiceNumber.trim().toUpperCase(),
@@ -91,6 +99,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
     setDescription('');
     setTechnicianName('');
     setInvoiceNumber('');
+    setCustomCategory('');
   };
 
   const filteredMaintenances = bundle.maintenances.filter((m) => {
@@ -183,6 +192,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
                 </span>
                 <select
                   aria-label="Categoría Técnica"
+                  data-testid="select-maintenance-category"
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
@@ -198,7 +208,19 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
                   <option value="IMPERMEABILIZACIÓN">
                     Impermeabilización / Obra Civil
                   </option>
+                  <option value="OTRA">Otra:</option>
                 </select>
+                {category === 'OTRA' && (
+                  <input
+                    type="text"
+                    aria-label="Especificar otra categoría técnica"
+                    data-testid="input-custom-maintenance-category"
+                    value={customCategory}
+                    onChange={(e) => setCustomCategory(e.target.value)}
+                    placeholder="Especificar otra categoría técnica..."
+                    className="mt-2 w-full bg-[#1a1b20] border border-[#00eefc]/60 px-3 py-2 text-white"
+                  />
+                )}
               </label>
             </div>
 

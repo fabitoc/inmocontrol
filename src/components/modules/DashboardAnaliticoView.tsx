@@ -1,19 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import {
   NewRentPaymentInput,
   OwnerDashboardBundle,
   Property,
 } from '../../types/domain';
 import {
+  buildSmartAlerts,
   calculateAgencyParticipation,
-  calculatePropertyCommission,
   formatCop,
-  formatCopInWords,
-  formatPeriodMonthLabel,
-  getContractBillingCycleState,
-  getCurrentPeriodMonth,
-  getPeriodCollectionStatus,
-  getPropertyTenantPaymentState,
 } from '../../services/inmoService';
 
 interface DashboardAnaliticoViewProps {
@@ -30,11 +24,17 @@ interface DashboardAnaliticoViewProps {
   onRecordPayment?: (input: NewRentPaymentInput) => void;
 }
 
+type AlertFilterType =
+  | 'TODAS'
+  | 'EN_MORA'
+  | 'LIQUIDACION_RETRASADA'
+  | 'PROXIMA_LIQUIDACION'
+  | 'PROXIMO_COBRO';
+
 export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
   bundle,
   allProperties,
   onNavigateModule,
-  onRecordPayment,
 }) => {
   const participation = calculateAgencyParticipation(
     bundle.selected_owner.id,
@@ -47,163 +47,24 @@ export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
     circumference -
     (participation.participationByCountPct / 100) * circumference;
 
-  const currentSystemPeriod = getCurrentPeriodMonth();
-  const rentableProperties = bundle.properties.filter(
-    (p) => p.property_type !== 'EDIFICIO MATRIZ'
+  const [alertFilter, setAlertFilter] = useState<AlertFilterType>('TODAS');
+
+  const alerts = buildSmartAlerts(bundle);
+  const moraAlerts = alerts.filter((a) => a.type === 'EN_MORA');
+  const delayedSettlementAlerts = alerts.filter(
+    (a) => a.type === 'LIQUIDACION_RETRASADA'
+  );
+  const upcomingSettlementAlerts = alerts.filter(
+    (a) => a.type === 'PROXIMA_LIQUIDACION'
+  );
+  const upcomingCollectionAlerts = alerts.filter(
+    (a) => a.type === 'PROXIMO_COBRO'
   );
 
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState<boolean>(false);
-  const [paymentPropertyId, setPaymentPropertyId] = useState<number>(
-    rentableProperties[0]?.id ?? 2
-  );
-  const [paymentPeriod, setPaymentPeriod] =
-    useState<string>(currentSystemPeriod);
-  const [paymentAmount, setPaymentAmount] = useState<number>(
-    rentableProperties[0]?.base_rent_cop ?? 1_500_000
-  );
-  const [paymentDate, setPaymentDate] = useState<string>(
-    `${currentSystemPeriod}-${String(new Date().getDate()).padStart(2, '0')}`
-  );
-  const [paymentMethod, setPaymentMethod] = useState<string>('TRANSACCIÓN');
-  const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [paymentFeedback, setPaymentFeedback] = useState<string | null>(null);
-  const periodSelectRef = useRef<HTMLSelectElement | null>(null);
-
-  const paymentCycleState = getContractBillingCycleState(
-    paymentPropertyId,
-    bundle.properties,
-    bundle.contracts,
-    bundle.payments
-  );
-
-  const activePeriodStatus = getPeriodCollectionStatus(
-    paymentPropertyId,
-    paymentPeriod,
-    bundle.properties,
-    bundle.contracts,
-    bundle.payments
-  );
-
-  const selectedModalProperty = bundle.properties.find(
-    (p) => p.id === paymentPropertyId
-  );
-  const selectedModalPaymentState = getPropertyTenantPaymentState(
-    paymentPropertyId,
-    bundle.properties,
-    bundle.contracts,
-    bundle.payments
-  );
-
-  useEffect(() => {
-    if (
-      !paymentCycleState.collectiblePeriods.includes(paymentPeriod) &&
-      paymentCycleState.activePeriod
-    ) {
-      setPaymentPeriod(paymentCycleState.activePeriod);
-    }
-  }, [
-    paymentPropertyId,
-    paymentPeriod,
-    paymentCycleState.activePeriod,
-    paymentCycleState.collectiblePeriods,
-  ]);
-
-  useEffect(() => {
-    const status = getPeriodCollectionStatus(
-      paymentPropertyId,
-      paymentPeriod,
-      bundle.properties,
-      bundle.contracts,
-      bundle.payments
-    );
-    setPaymentAmount(
-      status.remainingBalanceCop > 0 ? status.remainingBalanceCop : 0
-    );
-    setPaymentError(null);
-  }, [
-    paymentPropertyId,
-    paymentPeriod,
-    bundle.payments.length,
-    bundle.selected_owner.id,
-  ]);
-
-  useEffect(() => {
-    if (isPaymentModalOpen) {
-      periodSelectRef.current?.focus();
-    }
-  }, [isPaymentModalOpen, paymentPropertyId]);
-
-  const handleOpenPaymentModal = (propId: number) => {
-    const propState = getPropertyTenantPaymentState(
-      propId,
-      bundle.properties,
-      bundle.contracts,
-      bundle.payments
-    );
-    setPaymentPropertyId(propId);
-    setPaymentPeriod(propState.activePeriod);
-    setPaymentAmount(propState.remainingBalanceCop);
-    setPaymentError(null);
-    setPaymentFeedback(null);
-    setIsPaymentModalOpen(true);
-  };
-
-  const handlePaymentSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setPaymentError(null);
-    setPaymentFeedback(null);
-
-    const amount = Number(paymentAmount || 0);
-    if (amount <= 0) {
-      setPaymentError(
-        'Operación bloqueada: El valor del recaudo o abono debe ser mayor a $0 COP.'
-      );
-      return;
-    }
-
-    if (
-      activePeriodStatus.agreedRentCop > 0 &&
-      amount > activePeriodStatus.remainingBalanceCop
-    ) {
-      setPaymentError(
-        `Operación bloqueada: El abono de ${formatCop(amount)} supera el saldo pendiente del periodo ${paymentPeriod} (Canon pactado: ${formatCop(activePeriodStatus.agreedRentCop)} · Abonado: ${formatCop(activePeriodStatus.alreadyCollectedCop)} · Saldo máximo permitido: ${formatCop(activePeriodStatus.remainingBalanceCop)}).`
-      );
-      return;
-    }
-
-    const contract =
-      bundle.contracts.find(
-        (c) => c.property_id === paymentPropertyId && c.status !== 'FINALIZADO'
-      ) ?? bundle.contracts.find((c) => c.property_id === paymentPropertyId);
-
-    try {
-      onRecordPayment?.({
-        contract_id: contract?.id ?? 0,
-        property_id: paymentPropertyId,
-        period_month: paymentPeriod,
-        gross_amount_cop: amount,
-        payment_date: paymentDate,
-        payment_method: paymentMethod,
-        status: 'PAGADO',
-      });
-
-      const nextRemaining = Math.max(
-        0,
-        activePeriodStatus.remainingBalanceCop - amount
-      );
-      setPaymentFeedback(
-        nextRemaining === 0
-          ? `Pago completado (${formatCop(amount)} vía ${paymentMethod}): El inmueble quedó AL DÍA para el periodo ${paymentPeriod}.`
-          : `Abono registrado (${formatCop(amount)} vía ${paymentMethod}): Saldo pendiente del periodo ${paymentPeriod}: ${formatCop(nextRemaining)}. El botón [ PAGAR ] permanece habilitado hasta cubrir la totalidad.`
-      );
-    } catch (err) {
-      setPaymentError(
-        err instanceof Error
-          ? err.message
-          : 'Error al registrar el recaudo en el libro mayor.'
-      );
-    }
-  };
+  const filteredAlerts =
+    alertFilter === 'TODAS'
+      ? alerts
+      : alerts.filter((a) => a.type === alertFilter);
 
   return (
     <section
@@ -233,6 +94,13 @@ export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onNavigateModule('administracion-alertas')}
+            className="px-3 py-2 bg-[#1a1b20] border border-[#00FF66]/50 text-[#00FF66] font-mono text-xs uppercase tracking-wider hover:bg-[#00FF66]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#00FF66] focus-visible:outline-offset-2"
+          >
+            Ir a Matriz de Activos / Pagos →
+          </button>
           <button
             type="button"
             onClick={() => onNavigateModule('registro-control')}
@@ -438,12 +306,11 @@ export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
                 </span>{' '}
                 /{' '}
                 <span className="text-[#ff007f]">
-                  {bundle.contracts.filter((c) => c.status === 'MORA').length}{' '}
-                  Mora
+                  {moraAlerts.length} Mora
                 </span>
               </div>
               <p className="text-xs font-mono text-[#9ca3af] mt-1">
-                 Monitoreo automático sobre día límite de corte
+                Monitoreo automático sobre día límite de corte
               </p>
             </div>
             <div className="text-xs font-mono text-[#00eefc]">
@@ -453,616 +320,223 @@ export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
         </div>
       </div>
 
-      {/* Portfolio Analytical Breakdown Table */}
-      <div className="bg-[#0d0e12] border border-[#292a2e] p-5">
-        <div className="flex items-center justify-between mb-4">
+      {/* Real-Time Smart Alerts Panel (Moved from Administración to Dashboard) */}
+      <div
+        data-testid="dashboard-smart-alerts-panel"
+        className="bg-[#0d0e12] border border-[#292a2e] p-5 space-y-5"
+      >
+        <div className="border-b border-[#292a2e] pb-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
             <h3 className="text-sm font-mono font-bold uppercase tracking-wider text-white">
-              Matriz de Activos Inmobiliarios, Recaudo Mensual y Estado de Cuenta
+              Panel de Alertas Inteligentes (Tiempo Real)
             </h3>
             <p className="text-xs font-mono text-[#9ca3af]">
-              El botón [ PAGAR ] se activa en la fecha de corte o 5 días antes y
-              permanece habilitado con abonos hasta que el inquilino esté AL DÍA.
+              Moras de los inquilinos, liquidaciones retrasadas por aprobar,
+              próximas liquidaciones a ejecutar y próximos cobros
             </p>
           </div>
-          <span className="text-xs font-mono text-[#9ca3af]">
-            PROPIETARIO #{bundle.selected_owner.id}
-          </span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table
-            role="table"
-            aria-label="Tabla analítica de inmuebles del propietario seleccionado"
-            className="w-full text-left border-collapse font-mono text-xs"
-          >
-            <thead>
-              <tr className="border-b border-[#292a2e] text-[#9ca3af] bg-[#1a1b20]">
-                <th scope="col" className="py-2.5 px-3">
-                  CÓDIGO
-                </th>
-                <th scope="col" className="py-2.5 px-3">
-                  ACTIVO / JERARQUÍA
-                </th>
-                <th scope="col" className="py-2.5 px-3">
-                  TIPO
-                </th>
-                <th scope="col" className="py-2.5 px-3">
-                  INQUILINO ACTUAL
-                </th>
-                <th scope="col" className="py-2.5 px-3 text-right">
-                  CANON BASE
-                </th>
-                <th scope="col" className="py-2.5 px-3 text-right">
-                  RECAUDO / PAGAR
-                </th>
-                <th scope="col" className="py-2.5 px-3 text-center">
-                  ESTADO
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#292a2e]/60">
-              {bundle.properties.map((prop) => {
-                const paymentState = getPropertyTenantPaymentState(
-                  prop.id,
-                  bundle.properties,
-                  bundle.contracts,
-                  bundle.payments
-                );
-                const contract = paymentState.contract;
-                const comm = calculatePropertyCommission(
-                  prop.base_rent_cop,
-                  prop.commission_pct,
-                  0
-                );
-                const isChild = prop.parent_property_id !== null;
-                return (
-                  <tr
-                    key={prop.id}
-                    className="hover:bg-[#1a1b20]/70 transition-colors"
-                  >
-                    <td className="py-2.5 px-3 text-[#00eefc]">{prop.code}</td>
-                    <td className="py-2.5 px-3 text-white">
-                      {isChild && (
-                        <span className="text-[#00eefc] mr-1.5">├──</span>
-                      )}
-                      <span className="font-semibold">{prop.title}</span>
-                      <div className="text-[11px] text-[#9ca3af]">
-                        {prop.address}
-                      </div>
-                      <div className="mt-1">
-                        <span
-                          data-testid={`dashboard-occupancy-badge-${prop.id}`}
-                          className={`inline-block px-2 py-0.5 text-[10px] font-bold border ${
-                            prop.status === 'DISPONIBLE'
-                              ? 'bg-[#00FF66]/10 text-[#00FF66] border-[#00FF66]/40'
-                              : 'bg-[#00eefc]/10 text-[#00eefc] border-[#00eefc]/40'
-                          }`}
-                        >
-                          [{prop.status}]
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3 text-[#9ca3af]">
-                      {prop.property_type}
-                    </td>
-                    <td className="py-2.5 px-3 text-[#e3e2e7]">
-                      {contract ? (
-                        <div>
-                          <div>{contract.tenant_name}</div>
-                          <div className="text-[11px] text-[#9ca3af]">
-                            Corte Día {contract.cutoff_day} · Apertura:{' '}
-                            {paymentState.activationDateLabel}
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="text-[#9ca3af]">
-                          Sin contrato activo
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-right text-white">
-                      {prop.property_type === 'EDIFICIO MATRIZ'
-                        ? 'MATRIZ PRINCIPAL'
-                        : formatCop(prop.base_rent_cop)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right">
-                      {prop.property_type === 'EDIFICIO MATRIZ' ? (
-                        <span className="text-[#9ca3af]">
-                          Segregado por unidad
-                        </span>
-                      ) : (
-                        <div className="flex flex-col items-end gap-1">
-                          <button
-                            type="button"
-                            data-testid={`dashboard-pay-button-${prop.id}`}
-                            disabled={!paymentState.canPay}
-                            onClick={() => handleOpenPaymentModal(prop.id)}
-                            className={`px-3 py-1 font-mono font-bold text-[11px] uppercase tracking-wider border transition-colors ${
-                              paymentState.canPay
-                                ? 'bg-[#00eefc] text-[#0d0e12] border-[#00eefc] hover:bg-[#00eefc]/90'
-                                : 'bg-[#1a1b20] text-[#9ca3af]/60 border-[#292a2e] cursor-not-allowed'
-                            }`}
-                          >
-                            {!paymentState.hasActiveContract
-                              ? '[ SIN INQUILINO ]'
-                              : paymentState.isAlDia
-                                ? '[ AL DÍA // PAGADO ]'
-                                : '[ PAGAR ]'}
-                          </button>
-                          <div className="text-[10px] text-[#9ca3af]">
-                            Comisión: {prop.commission_pct}% (
-                            {formatCop(comm.percentageFeeCop)})
-                          </div>
-                          {paymentState.hasActiveContract &&
-                            paymentState.totalRemainingDebtCop > 0 && (
-                              <div
-                                className="text-[10px] text-[#ffb800]"
-                                data-testid={`dashboard-remaining-debt-${prop.id}`}
-                              >
-                                Saldo: {formatCop(paymentState.totalRemainingDebtCop)}
-                              </div>
-                            )}
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      {prop.property_type === 'EDIFICIO MATRIZ' ? (
-                        <span className="inline-block px-2 py-0.5 text-[11px] font-bold border bg-[#1a1b20] text-[#9ca3af] border-[#292a2e]">
-                          [MATRIZ]
-                        </span>
-                      ) : !paymentState.hasActiveContract ? (
-                        <span
-                          data-testid={`dashboard-tenant-status-${prop.id}`}
-                          className="inline-block px-2 py-0.5 text-[11px] font-bold border bg-[#1a1b20] text-[#9ca3af] border-[#292a2e]"
-                        >
-                          [SIN INQUILINO]
-                        </span>
-                      ) : (
-                        <span
-                          data-testid={`dashboard-tenant-status-${prop.id}`}
-                          className={`inline-block px-2 py-0.5 text-[11px] font-bold border ${
-                            paymentState.isAlDia
-                              ? 'bg-[#00FF66]/10 text-[#00FF66] border-[#00FF66]/40'
-                              : 'bg-[#ff007f]/15 text-[#ff007f] border-[#ff007f]/50'
-                          }`}
-                        >
-                          [{paymentState.statusLabel}]
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Modal Window: 04 // Registro de Recaudo Mensual + Historial Reciente de Recaudos & Saldos */}
-      {isPaymentModalOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Ventana de Registro de Recaudo Mensual e Historial Reciente"
-          data-testid="payment-modal-dialog"
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
-        >
-          <div className="bg-[#0d0e12] border-2 border-[#00eefc] w-full max-w-5xl max-h-[92vh] overflow-y-auto p-6 space-y-5 shadow-2xl">
-            <div className="flex items-start justify-between border-b border-[#292a2e] pb-4 gap-4">
-              <div>
-                <div className="text-xs font-mono text-[#00eefc] uppercase tracking-widest">
-                  04 // PLANTILLA DE PAGO Y RECAUDO MENSUAL
-                </div>
-                <h3 className="text-lg font-mono font-bold text-white mt-0.5">
-                  {selectedModalProperty?.title ?? 'Inmueble'} —{' '}
-                  {selectedModalPaymentState.contract?.tenant_name ??
-                    'Inquilino Activo'}
-                </h3>
-                <p className="text-xs font-mono text-[#9ca3af]">
-                  Se permiten abonos parciales; el botón [ PAGAR ] seguirá
-                  habilitado hasta cubrir el 100% del saldo pendiente.
-                </p>
-              </div>
-              <button
-                type="button"
-                data-testid="close-payment-modal-button"
-                onClick={() => setIsPaymentModalOpen(false)}
-                className="px-3 py-1.5 bg-[#1a1b20] border border-[#ff007f]/60 text-[#ff007f] font-mono font-bold text-xs uppercase hover:bg-[#ff007f]/15"
-              >
-                [ CERRAR ✕ ]
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Left Column: Payment Template (04 // Registro de Recaudo Mensual) */}
-              <form
-                noValidate
-                onSubmit={handlePaymentSubmit}
-                data-testid="panel-recaudo"
-                className="lg:col-span-6 bg-[#121317] border border-[#292a2e] p-5 space-y-4 flex flex-col justify-between"
-              >
-                <div className="space-y-3">
-                  <div className="border-b border-[#292a2e] pb-2 flex items-center justify-between">
-                    <h4 className="text-sm font-mono font-bold uppercase text-[#00FF66]">
-                      04 // Registro de Recaudo Mensual
-                    </h4>
-                    <span className="text-[11px] font-mono text-[#9ca3af]">
-                      ABONOS Y PAGOS
-                    </span>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-mono text-[#9ca3af] mb-1">
-                      Inmueble Recaudado
-                    </label>
-                    <select
-                      aria-label="Inmueble Recaudado"
-                      data-testid="select-payment-property"
-                      value={paymentPropertyId}
-                      onChange={(e) =>
-                        setPaymentPropertyId(Number(e.target.value))
-                      }
-                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-xs font-mono text-white"
-                    >
-                      {rentableProperties.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.code} — {p.title} (Canon:{' '}
-                          {formatCop(p.base_rent_cop)})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-mono text-[#9ca3af] mb-1">
-                        Periodo Contable (Corte Activo)
-                      </label>
-                      <select
-                        ref={periodSelectRef}
-                        aria-label="Periodo Contable"
-                        data-testid="select-payment-period"
-                        value={paymentPeriod}
-                        onChange={(e) => setPaymentPeriod(e.target.value)}
-                        className="w-full bg-[#1a1b20] border border-[#00FF66]/60 px-3 py-2 text-xs font-mono text-white font-bold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#00FF66]"
-                      >
-                        {paymentCycleState.collectiblePeriods.map((p) => (
-                          <option key={p} value={p}>
-                            {formatPeriodMonthLabel(p, currentSystemPeriod)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-mono text-[#9ca3af] mb-1">
-                        Valor Recibido / Abono (COP)
-                      </label>
-                      <input
-                        type="number"
-                        aria-label="Valor Recibido COP"
-                        data-testid="input-payment-amount-cop"
-                        min={1}
-                        max={
-                          activePeriodStatus.remainingBalanceCop > 0
-                            ? activePeriodStatus.remainingBalanceCop
-                            : undefined
-                        }
-                        value={paymentAmount}
-                        onChange={(e) =>
-                          setPaymentAmount(Number(e.target.value))
-                        }
-                        className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-xs font-mono text-white"
-                        required
-                      />
-                      <div
-                        className="mt-1 text-[11px] font-mono text-[#00FF66]"
-                        data-testid="payment-amount-words"
-                      >
-                        {formatCop(paymentAmount)} —{' '}
-                        {formatCopInWords(paymentAmount)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div
-                    className="p-2.5 bg-[#1a1b20] border border-[#292a2e] font-mono text-[11px] space-y-1.5"
-                    data-testid="payment-cutoff-cycle-info"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-[#9ca3af] border-b border-[#292a2e] pb-1">
-                      <span>
-                        Registro Inquilino:{' '}
-                        <strong className="text-white">
-                          {paymentCycleState.registrationDate}
-                        </strong>{' '}
-                        · Corte:{' '}
-                        <strong className="text-[#00eefc]">
-                          Día {paymentCycleState.cutoffDay}
-                        </strong>
-                      </span>
-                      <span className="text-[#ffb800]">
-                        Próximo periodo ({paymentCycleState.nextPeriod}) se
-                        activa el {paymentCycleState.nextCutoffDate}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
-                      <span className="text-[#9ca3af]">
-                        Pactado ({paymentPeriod}):{' '}
-                        <strong
-                          className="text-white"
-                          data-testid="payment-agreed-rent-cop"
-                        >
-                          {formatCop(activePeriodStatus.agreedRentCop)}
-                        </strong>
-                      </span>
-                      <span className="text-[#9ca3af]">
-                        Abonado:{' '}
-                        <strong
-                          className="text-[#00eefc]"
-                          data-testid="payment-already-collected-cop"
-                        >
-                          {formatCop(activePeriodStatus.alreadyCollectedCop)}
-                        </strong>
-                      </span>
-                      <span className="text-[#9ca3af]">
-                        Saldo que Debe:{' '}
-                        <strong
-                          className={
-                            activePeriodStatus.remainingBalanceCop === 0
-                              ? 'text-[#00FF66]'
-                              : 'text-[#ffb800]'
-                          }
-                          data-testid="payment-remaining-balance-cop"
-                        >
-                          {formatCop(activePeriodStatus.remainingBalanceCop)}
-                        </strong>
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-mono text-[#9ca3af] mb-1">
-                        Fecha de Pago
-                      </label>
-                      <input
-                        type="date"
-                        aria-label="Fecha de Pago"
-                        data-testid="input-payment-date"
-                        value={paymentDate}
-                        onChange={(e) => setPaymentDate(e.target.value)}
-                        className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-xs font-mono text-white"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-mono text-[#9ca3af] mb-1">
-                        Medio de Pago
-                      </label>
-                      <select
-                        aria-label="Medio de Pago"
-                        data-testid="select-payment-method"
-                        value={paymentMethod}
-                        onChange={(e) => setPaymentMethod(e.target.value)}
-                        className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-xs font-mono text-white"
-                      >
-                        <option value="EFECTIVO">EFECTIVO</option>
-                        <option value="TRANSACCIÓN">TRANSACCIÓN</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {paymentError && (
-                    <div
-                      className="p-2 bg-[#ff007f]/15 border border-[#ff007f] text-xs font-mono text-[#ff007f]"
-                      data-testid="payment-error-feedback"
-                    >
-                      {paymentError}
-                    </div>
-                  )}
-
-                  {paymentFeedback && (
-                    <div
-                      className="p-2 bg-[#00FF66]/10 border border-[#00FF66] text-xs font-mono text-[#00FF66]"
-                      data-testid="payment-success-feedback"
-                    >
-                      {paymentFeedback}
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={activePeriodStatus.isFullyPaid}
-                  className={`mt-4 w-full py-2.5 font-mono font-bold text-xs uppercase tracking-wider border transition-colors ${
-                    activePeriodStatus.isFullyPaid
-                      ? 'bg-[#1a1b20] border-[#292a2e] text-[#9ca3af] cursor-not-allowed'
-                      : 'bg-[#00FF66]/15 border-[#00FF66] text-[#00FF66] hover:bg-[#00FF66]/25'
-                  }`}
-                >
-                  {activePeriodStatus.isFullyPaid
-                    ? '[ PERIODO AL DÍA — SALDO CUBIERTO AL 100% ]'
-                    : '[ REGISTRAR ABONO EN LIBRO MAYOR ]'}
-                </button>
-              </form>
-
-              {/* Right Column: Historial Reciente de Recaudos Anteriores (Solo Saldos que Debe) */}
-              <div className="lg:col-span-6 bg-[#121317] border border-[#292a2e] p-5 space-y-4 flex flex-col justify-between">
-                <div
-                  className="space-y-4"
-                  data-testid="modal-recent-payments"
-                >
-                  <div className="border-b border-[#292a2e] pb-3 flex items-center justify-between gap-2">
-                    <div>
-                      <h4 className="text-sm font-mono font-bold uppercase tracking-wider text-white">
-                        Historial Reciente de Recaudos Anteriores
-                      </h4>
-                      <p className="text-[11px] font-mono text-[#9ca3af] mt-0.5">
-                        Filtrado exclusivamente por los saldos que debe. Escoja a
-                        cuál saldo abonar o pagar.
-                      </p>
-                    </div>
-                    <span
-                      data-testid="modal-pending-balances"
-                      className={`text-xs font-mono font-bold px-2.5 py-1 border ${
-                        selectedModalPaymentState.isAlDia
-                          ? 'text-[#00FF66] border-[#00FF66]/40 bg-[#00FF66]/10'
-                          : 'text-[#ff007f] border-[#ff007f]/50 bg-[#ff007f]/15'
-                      }`}
-                    >
-                      Total que Debe:{' '}
-                      {formatCop(
-                        selectedModalPaymentState.totalRemainingDebtCop
-                      )}
-                    </span>
-                  </div>
-
-                  {(() => {
-                    const owedBalances =
-                      selectedModalPaymentState.periodBalances.filter(
-                        (b) => b.remainingBalanceCop > 0
-                      );
-
-                    if (owedBalances.length === 0) {
-                      return (
-                        <div
-                          data-testid="modal-no-pending-debt"
-                          className="p-4 bg-[#1a1b20] border border-[#00FF66]/40 font-mono text-xs text-[#00FF66]"
-                        >
-                          Este inquilino no registra saldos pendientes ni en
-                          mora ($0 COP). Estado: [AL DÍA].
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
-                        {owedBalances.map((bal) => {
-                          const isSelectedToPay =
-                            paymentPeriod === bal.periodMonth;
-                          const isMoraPeriod =
-                            bal.periodMonth < currentSystemPeriod;
-                          const periodPayments = bundle.payments.filter(
-                            (rp) =>
-                              rp.property_id === paymentPropertyId &&
-                              rp.period_month === bal.periodMonth &&
-                              rp.status === 'PAGADO'
-                          );
-
-                          return (
-                            <div
-                              key={bal.periodMonth}
-                              data-testid={`owed-balance-card-${bal.periodMonth}`}
-                              onClick={() => {
-                                setPaymentPeriod(bal.periodMonth);
-                                setPaymentAmount(bal.remainingBalanceCop);
-                                setPaymentError(null);
-                              }}
-                              className={`p-3.5 bg-[#1a1b20] border cursor-pointer transition-colors font-mono text-xs space-y-2.5 ${
-                                isSelectedToPay
-                                  ? 'border-2 border-[#00eefc] bg-[#00eefc]/5'
-                                  : 'border-[#292a2e] hover:border-[#ffb800]/60'
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-white font-bold text-sm">
-                                      Periodo {bal.periodMonth}
-                                    </span>
-                                    <span
-                                      className={`px-1.5 py-0.5 text-[10px] font-bold border ${
-                                        isMoraPeriod
-                                          ? 'border-[#ff007f] text-[#ff007f] bg-[#ff007f]/15'
-                                          : 'border-[#ffb800] text-[#ffb800] bg-[#ffb800]/15'
-                                      }`}
-                                    >
-                                      {isMoraPeriod
-                                        ? '[SALDO EN MORA]'
-                                        : '[SALDO PENDIENTE]'}
-                                    </span>
-                                  </div>
-                                  <div className="text-[11px] text-[#9ca3af] mt-1">
-                                    Canon Pactado:{' '}
-                                    <strong className="text-white">
-                                      {formatCop(bal.agreedRentCop)}
-                                    </strong>{' '}
-                                    · Abonado:{' '}
-                                    <strong className="text-[#00eefc]">
-                                      {formatCop(bal.alreadyCollectedCop)}
-                                    </strong>
-                                  </div>
-                                </div>
-
-                                <div className="text-right">
-                                  <div className="text-[10px] uppercase text-[#9ca3af]">
-                                    Saldo que debe:
-                                  </div>
-                                  <div className="text-sm font-bold text-[#ff007f]">
-                                    {formatCop(bal.remainingBalanceCop)}
-                                  </div>
-                                </div>
-                              </div>
-
-                              {periodPayments.length > 0 && (
-                                <div className="pl-2.5 border-l-2 border-[#00eefc]/40 space-y-1 text-[11px] text-[#9ca3af]">
-                                  {periodPayments.map((rp, idx) => (
-                                    <div
-                                      key={rp.id}
-                                      className="flex items-center justify-between"
-                                    >
-                                      <span>
-                                        Abono #{idx + 1} ({rp.payment_date}) ·{' '}
-                                        <strong className="text-white">
-                                          {rp.payment_method}
-                                        </strong>
-                                      </span>
-                                      <span className="text-[#00eefc] font-bold">
-                                        {formatCop(rp.gross_amount_cop)}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-
-                              <div className="pt-1 flex items-center justify-between border-t border-[#292a2e]">
-                                <span className="text-[10px] text-[#9ca3af]">
-                                  {isMoraPeriod
-                                    ? `Se liquida en el periodo actual (${currentSystemPeriod})`
-                                    : `Corte activo (${currentSystemPeriod})`}
-                                </span>
-                                <button
-                                  type="button"
-                                  data-testid={`select-owed-balance-${bal.periodMonth}`}
-                                  onClick={(ev) => {
-                                    ev.stopPropagation();
-                                    setPaymentPeriod(bal.periodMonth);
-                                    setPaymentAmount(bal.remainingBalanceCop);
-                                    setPaymentError(null);
-                                  }}
-                                  className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider border ${
-                                    isSelectedToPay
-                                      ? 'bg-[#00eefc] text-[#0d0e12] border-[#00eefc]'
-                                      : 'bg-[#121317] text-[#00eefc] border-[#00eefc]/50 hover:bg-[#00eefc]/15'
-                                  }`}
-                                >
-                                  {isSelectedToPay
-                                    ? '[ ✓ SALDO SELECCIONADO A PAGAR ]'
-                                    : '[ ESCOGER ESTE SALDO A PAGAR ]'}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-            </div>
+          <div className="flex items-center gap-2 font-mono text-xs">
+            <span
+              data-testid="dashboard-alerts-total-badge"
+              className="px-2.5 py-1 bg-[#ffb800]/10 border border-[#ffb800]/40 text-[#ffb800] font-bold"
+            >
+              {alerts.length} ALERTAS ACTIVAS
+            </span>
           </div>
         </div>
-      )}
+
+        {/* 4 Category Filter / Indicator Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 font-mono text-xs">
+          <button
+            type="button"
+            data-testid="alert-filter-TODAS"
+            onClick={() => setAlertFilter('TODAS')}
+            className={`text-left p-3 border transition-colors ${
+              alertFilter === 'TODAS'
+                ? 'bg-[#00eefc]/15 border-[#00eefc] text-white'
+                : 'bg-[#14151a] border-[#292a2e] text-[#9ca3af] hover:border-[#00eefc]/50'
+            }`}
+          >
+            <div className="text-[10px] uppercase tracking-wider text-[#9ca3af]">
+              RADAR COMPLETO
+            </div>
+            <div className="text-base font-bold text-white mt-0.5">
+              Todas ({alerts.length})
+            </div>
+          </button>
+
+          <button
+            type="button"
+            data-testid="alert-summary-mora"
+            onClick={() => setAlertFilter('EN_MORA')}
+            className={`text-left p-3 border transition-colors ${
+              alertFilter === 'EN_MORA'
+                ? 'bg-[#ff007f]/20 border-[#ff007f] text-white'
+                : 'bg-[#14151a] border-[#ff007f]/40 text-[#9ca3af] hover:border-[#ff007f]'
+            }`}
+          >
+            <div className="text-[10px] uppercase tracking-wider text-[#ff007f] font-bold">
+              1. MORAS DE INQUILINOS
+            </div>
+            <div className="text-base font-bold text-white mt-0.5">
+              {moraAlerts.length} en mora ·{' '}
+              {formatCop(
+                moraAlerts.reduce((sum, a) => sum + a.amount_cop, 0)
+              )}
+            </div>
+          </button>
+
+          <button
+            type="button"
+            data-testid="alert-summary-liquidacion-retrasada"
+            onClick={() => setAlertFilter('LIQUIDACION_RETRASADA')}
+            className={`text-left p-3 border transition-colors ${
+              alertFilter === 'LIQUIDACION_RETRASADA'
+                ? 'bg-[#ff007f]/20 border-[#ff007f] text-white'
+                : 'bg-[#14151a] border-[#ff007f]/40 text-[#9ca3af] hover:border-[#ff007f]'
+            }`}
+          >
+            <div className="text-[10px] uppercase tracking-wider text-[#ff007f] font-bold">
+              2. LIQUIDACIONES RETRASADAS POR APROBAR
+            </div>
+            <div className="text-base font-bold text-white mt-0.5">
+              {delayedSettlementAlerts.length} retrasada(s) ·{' '}
+              {formatCop(
+                delayedSettlementAlerts.reduce(
+                  (sum, a) => sum + a.amount_cop,
+                  0
+                )
+              )}
+            </div>
+          </button>
+
+          <button
+            type="button"
+            data-testid="alert-summary-proxima-liquidacion"
+            onClick={() => setAlertFilter('PROXIMA_LIQUIDACION')}
+            className={`text-left p-3 border transition-colors ${
+              alertFilter === 'PROXIMA_LIQUIDACION'
+                ? 'bg-[#00eefc]/20 border-[#00eefc] text-white'
+                : 'bg-[#14151a] border-[#00eefc]/40 text-[#9ca3af] hover:border-[#00eefc]'
+            }`}
+          >
+            <div className="text-[10px] uppercase tracking-wider text-[#00eefc] font-bold">
+              3. PRÓXIMAS LIQUIDACIONES A EJECUTAR
+            </div>
+            <div className="text-base font-bold text-white mt-0.5">
+              {upcomingSettlementAlerts.length} programada(s) ·{' '}
+              {formatCop(
+                upcomingSettlementAlerts.reduce(
+                  (sum, a) => sum + a.amount_cop,
+                  0
+                )
+              )}
+            </div>
+          </button>
+
+          <button
+            type="button"
+            data-testid="alert-summary-proximo-cobro"
+            onClick={() => setAlertFilter('PROXIMO_COBRO')}
+            className={`text-left p-3 border transition-colors ${
+              alertFilter === 'PROXIMO_COBRO'
+                ? 'bg-[#ffb800]/20 border-[#ffb800] text-white'
+                : 'bg-[#14151a] border-[#ffb800]/40 text-[#9ca3af] hover:border-[#ffb800]'
+            }`}
+          >
+            <div className="text-[10px] uppercase tracking-wider text-[#ffb800] font-bold">
+              4. PRÓXIMOS COBROS
+            </div>
+            <div className="text-base font-bold text-white mt-0.5">
+              {upcomingCollectionAlerts.length} cobro(s) ·{' '}
+              {formatCop(
+                upcomingCollectionAlerts.reduce(
+                  (sum, a) => sum + a.amount_cop,
+                  0
+                )
+              )}
+            </div>
+          </button>
+        </div>
+
+        {/* Alerts List */}
+        <div
+          data-testid="dashboard-alerts-list"
+          className="space-y-3 font-mono text-xs"
+        >
+          {filteredAlerts.map((alert) => {
+            const badgeStyle =
+              alert.severity === 'MAGENTA'
+                ? 'border-[#ff007f] bg-[#ff007f]/10 text-[#ff007f]'
+                : alert.severity === 'AMBER'
+                  ? 'border-[#ffb800] bg-[#ffb800]/10 text-[#ffb800]'
+                  : 'border-[#00eefc] bg-[#00eefc]/10 text-[#00eefc]';
+
+            const isSettlementAlert =
+              alert.type === 'LIQUIDACION_RETRASADA' ||
+              alert.type === 'PROXIMA_LIQUIDACION' ||
+              alert.type === 'PENDIENTE_LIQUIDACION';
+
+            return (
+              <div
+                key={alert.id}
+                data-testid={`smart-alert-${alert.id}`}
+                className="bg-[#1a1b20] border border-[#292a2e] p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+              >
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-bold border ${badgeStyle}`}
+                    >
+                      {alert.cutoff_label}
+                    </span>
+                  </div>
+                  <div className="text-white font-bold mt-1.5">
+                    {alert.title}
+                  </div>
+                  <div className="text-[11px] text-[#9ca3af]">
+                    {alert.subtitle}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0">
+                  <div className="text-right">
+                    <div className="text-[10px] text-[#9ca3af] uppercase">
+                      {alert.type === 'EN_MORA'
+                        ? 'SALDO EN MORA'
+                        : alert.type === 'LIQUIDACION_RETRASADA'
+                          ? 'NETO POR APROBAR'
+                          : alert.type === 'PROXIMA_LIQUIDACION'
+                            ? 'PROYECCIÓN CIERRE'
+                            : 'VALOR COBRO'}
+                    </div>
+                    <div className="text-sm font-bold text-white">
+                      {formatCop(alert.amount_cop)}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    data-testid={`alert-action-${alert.id}`}
+                    onClick={() =>
+                      onNavigateModule(
+                        isSettlementAlert
+                          ? 'liquidaciones'
+                          : 'administracion-alertas'
+                      )
+                    }
+                    className="px-2.5 py-1.5 bg-[#0d0e12] border border-[#00eefc]/50 text-[#00eefc] text-[10px] font-bold uppercase hover:bg-[#00eefc]/15"
+                  >
+                    {isSettlementAlert
+                      ? '[ IR A LIQUIDACIONES → ]'
+                      : '[ GESTIONAR EN ADMINISTRACIÓN → ]'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </section>
   );
 };

@@ -221,13 +221,19 @@ export interface Settlement {
 
 export interface SmartAlert {
   id: string;
-  type: 'PROXIMO_COBRO' | 'EN_MORA' | 'PENDIENTE_LIQUIDACION';
-  severity: 'AMBER' | 'MAGENTA' | 'CYAN';
+  type:
+    | 'EN_MORA'
+    | 'LIQUIDACION_RETRASADA'
+    | 'PROXIMA_LIQUIDACION'
+    | 'PROXIMO_COBRO'
+    | 'PENDIENTE_LIQUIDACION';
+  severity: 'AMBER' | 'MAGENTA' | 'CYAN' | 'GREEN';
   title: string;
   subtitle: string;
   amount_cop: number;
   cutoff_label: string;
   property_id?: number;
+  period_month?: string;
 }
 
 export interface WeeklyTelemetryPoint {
