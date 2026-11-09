@@ -933,4 +933,117 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       target: { value: 'Ascensor y Domótica' },
     });
   });
+
+  it('removes bank account fields from Registro de Propietario, allows editing main/root properties in Resumen de Inmuebles, and records handover notes + abono with payment description in Liquidaciones when tenant is not a paz y salvo', () => {
+    const currentMonth = getCurrentPeriodMonth();
+    render(<App />);
+
+    // 1. Navigate to Module 2 (Registro y Control) -> 01 // Registro de Propietario has no bank dispersion fields
+    fireEvent.click(screen.getByTestId('nav-registro-control'));
+    expect(screen.getByTestId('panel-propietario')).toBeInTheDocument();
+    expect(screen.queryByTestId('input-owner-bank')).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('select-owner-account-type')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId('input-owner-account')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Número de Cuenta para Dispersión/i)
+    ).not.toBeInTheDocument();
+
+    // 2. Switch to 02 // Registro de Inmueble and edit main property/matrix (id 1) in Resumen de Inmuebles del Propietario Activo
+    fireEvent.click(screen.getByTestId('tab-inmueble'));
+    const editBtn = screen.getByTestId('edit-root-property-btn-1');
+    expect(editBtn).toBeInTheDocument();
+    fireEvent.click(editBtn);
+
+    expect(screen.getByTestId('edit-root-property-panel-1')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('edit-prop-title-1'), {
+      target: { value: 'Edificio Matriz Los Rosales Renovado' },
+    });
+    fireEvent.change(screen.getByTestId('edit-prop-address-1'), {
+      target: { value: 'Cra 4 # 72-88' },
+    });
+    fireEvent.click(screen.getByTestId('save-edit-property-btn-1'));
+
+    expect(
+      screen.queryByTestId('edit-root-property-panel-1')
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId('summary-root-title-1')).toHaveTextContent(
+      'Edificio Matriz Los Rosales Renovado'
+    );
+
+    // 3. Navigate to Module 4 (Administración) and execute property handover on Property 5 (Bodega Industrial Zona Franca, which is in MORA for 2026-10 and currentMonth, Canon $4.200.000)
+    fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
+    const handoverSelect = screen.getByTestId('handover-property-select');
+    fireEvent.change(handoverSelect, { target: { value: '5' } });
+
+    expect(screen.getByTestId('handover-debt-status')).toHaveTextContent(
+      /INQUILINO NO ESTÁ A PAZ Y SALVO/i
+    );
+
+    // Record a partial handover abono of $500.000 with description
+    fireEvent.change(screen.getByTestId('input-handover-abono-cop'), {
+      target: { value: '500000' },
+    });
+    fireEvent.change(screen.getByTestId('input-handover-payment-description'), {
+      target: {
+        value: 'Abono en entrega de inmueble Bodega por canon atrasado',
+      },
+    });
+    fireEvent.click(screen.getByTestId('hazard-handover-button'));
+
+    expect(screen.getByTestId('handover-feedback')).toHaveTextContent(
+      /registrada nota en Liquidaciones/i
+    );
+    expect(screen.getByTestId('property-status-badge-5')).toHaveTextContent(
+      '[DISPONIBLE]'
+    );
+
+    // 4. Navigate to Module 5 (Liquidaciones) on current settlement period and verify:
+    //    - The $500.000 abono was added to the active settlement gross income along with its payment description
+    //    - The handover settlement note appears with the owed months and remaining debt
+    fireEvent.click(screen.getByTestId('nav-liquidaciones'));
+    fireEvent.change(screen.getByTestId('select-settlement-period'), {
+      target: { value: currentMonth },
+    });
+
+    // $500.000 handover abono (Prop 5) in currentMonth
+    expect(screen.getByTestId('settlement-gross-income')).toHaveTextContent(
+      '$500.000'
+    );
+    expect(
+      screen.getByTestId('settlement-line-abonos-list-5')
+    ).toHaveTextContent(
+      /Abono en entrega de inmueble Bodega por canon atrasado/i
+    );
+
+    const handoverNotesBox = screen.getByTestId('settlement-handover-notes');
+    expect(handoverNotesBox).toBeInTheDocument();
+    expect(handoverNotesBox).toHaveTextContent(/2026-10/i);
+    expect(handoverNotesBox).toHaveTextContent(
+      /Abono en entrega de inmueble Bodega por canon atrasado/i
+    );
+
+    // Also verify PDF generation includes the handover note and payment description
+    const bundle = inmoRepository.getOwnerDashboardBundle(1);
+    const preview = calculateOwnerSettlementPreview(
+      1,
+      bundle.properties,
+      bundle.payments,
+      bundle.maintenances,
+      currentMonth,
+      bundle.contracts,
+      bundle.settlements,
+      bundle.handover_notes ?? []
+    );
+    const pdfContent = generateSettlementPdfContent(
+      buildInvoiceFromPreview(bundle, preview)
+    );
+    expect(pdfContent).toContain(
+      'NOTAS DE LIQUIDACION POR ENTREGA DE INMUEBLE'
+    );
+    expect(pdfContent).toContain(
+      'Abono en entrega de inmueble Bodega por canon atrasado'
+    );
+  });
 });

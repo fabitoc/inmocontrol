@@ -39,7 +39,9 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
       bundle.selected_owner.id,
       bundle.payments,
       bundle.maintenances,
-      bundle.settlements
+      bundle.settlements,
+      new Date(),
+      bundle.handover_notes ?? []
     );
 
   const [viewMode, setViewMode] = useState<'ACTIVA' | 'HISTORIAL'>('ACTIVA');
@@ -63,6 +65,7 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
     bundle.selected_owner.id,
     bundle.payments.length,
     bundle.maintenances.length,
+    (bundle.handover_notes ?? []).length,
   ]);
 
   const isPeriodAlreadyApproved = bundle.settlements.some(
@@ -82,7 +85,8 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
     bundle.maintenances,
     periodMonth,
     bundle.contracts,
-    bundle.settlements
+    bundle.settlements,
+    bundle.handover_notes ?? []
   );
 
   const weeklySeries = buildWeeklyTelemetrySeries(bundle);
@@ -516,6 +520,11 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                                               {ab.reference_code}
                                             </strong>{' '}
                                             ({ab.payment_date})
+                                            {ab.payment_description && (
+                                              <span className="ml-1 text-[#00eefc]">
+                                                · {ab.payment_description}
+                                              </span>
+                                            )}
                                           </span>
                                           <span className="text-[#00eefc] font-bold">
                                             {formatCop(ab.owner_dividend_cop)}
@@ -541,6 +550,23 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                       </tbody>
                     </table>
                   </div>
+
+                  {selectedHistoryDoc.handoverNotes &&
+                    selectedHistoryDoc.handoverNotes.length > 0 && (
+                      <div
+                        data-testid="historical-handover-notes"
+                        className="p-3 bg-[#1a1b20] border border-[#ffb800] text-xs space-y-1.5"
+                      >
+                        <div className="text-[#ffb800] font-bold uppercase">
+                          Notas de Entrega de Inmueble Selladas en el Cierre
+                        </div>
+                        {selectedHistoryDoc.handoverNotes.map((note) => (
+                          <div key={note.id} className="text-[#e3e2e7] text-[11px]">
+                            • {note.note_text}
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                   <div className="text-xs font-bold text-white uppercase pt-2">
                     2. Mantenimientos Deducidos en este Cierre (1:1 Neto)
@@ -992,6 +1018,14 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                                           </span>
                                         )}
                                         · {rp.payment_method} ({rp.payment_date})
+                                        {rp.payment_description && (
+                                          <span
+                                            className="ml-1 text-[#00eefc] font-semibold"
+                                            data-testid={`settlement-abono-desc-${rp.id}`}
+                                          >
+                                            · Descripción: {rp.payment_description}
+                                          </span>
+                                        )}
                                       </span>
                                       <span className="text-[#00FF66] font-bold">
                                         {formatCop(ownerDividend)}
@@ -1032,6 +1066,61 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                   </tbody>
                 </table>
               </div>
+
+              {preview.handoverNotes && preview.handoverNotes.length > 0 && (
+                <div
+                  data-testid="settlement-handover-notes"
+                  className="p-3.5 bg-[#1a1b20] border-2 border-[#ffb800] font-mono text-xs space-y-2.5"
+                >
+                  <div className="flex items-center justify-between border-b border-[#292a2e] pb-1.5">
+                    <span className="text-[#ffb800] font-bold uppercase">
+                      Notas de Liquidación por Entrega de Inmueble (Saldos
+                      Pendientes y Abonos en Entrega)
+                    </span>
+                    <span className="text-[11px] text-[#00eefc]">
+                      Periodo {periodMonth}
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {preview.handoverNotes.map((note) => (
+                      <div
+                        key={note.id}
+                        data-testid={`settlement-handover-note-${note.id}`}
+                        className="p-2.5 bg-[#121317] border border-[#ffb800]/50 space-y-1"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-white font-bold">
+                            [{note.property_code}] {note.property_title} —
+                            Inquilino: {note.tenant_name}
+                          </span>
+                          <span className="text-[11px] text-[#ffb800]">
+                            Restitución: {note.handover_date}
+                          </span>
+                        </div>
+                        <div className="text-[#e3e2e7] text-[11px]">
+                          {note.note_text}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3 text-[11px] pt-1">
+                          {note.abono_amount_cop > 0 && (
+                            <span className="text-[#00FF66] font-bold">
+                              Abono sumado a liquidación:{' '}
+                              {formatCop(note.abono_amount_cop)} (
+                              {note.payment_description})
+                            </span>
+                          )}
+                          {note.remaining_debt_cop > 0 && (
+                            <span className="text-[#ff007f] font-bold">
+                              Saldo adeudado en entrega:{' '}
+                              {formatCop(note.remaining_debt_cop)} · Meses
+                              adeudados: {note.owed_months.join(', ')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {preview.activeMoraBalances &&
                 preview.activeMoraBalances.length > 0 && (

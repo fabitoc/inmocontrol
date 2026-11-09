@@ -1,4 +1,5 @@
 import {
+  HandoverSettlementNote,
   Owner,
   OwnerDashboardBundle,
   Settlement,
@@ -21,6 +22,7 @@ export interface SettlementInvoiceDocument {
   owner: Owner;
   lines: SettlementLineSnapshot[];
   activeMoraBalances?: ActiveMoraBalanceSnapshot[];
+  handoverNotes?: HandoverSettlementNote[];
   maintenances: SettlementMaintenanceSnapshot[];
   grossIncomeCop: number;
   commissionAmountCop: number;
@@ -56,6 +58,7 @@ export function buildInvoiceFromPreview(
       reference_code: rp.reference_code,
       payment_date: rp.payment_date,
       payment_method: rp.payment_method,
+      payment_description: rp.payment_description,
       origin_period_month: rp.period_month,
       is_mora_payment: rp.period_month < preview.periodMonth,
       gross_amount_cop: rp.gross_amount_cop,
@@ -102,6 +105,7 @@ export function buildInvoiceFromPreview(
     owner: bundle.selected_owner,
     lines,
     activeMoraBalances: preview.activeMoraBalances ?? [],
+    handoverNotes: preview.handoverNotes ?? [],
     maintenances,
     grossIncomeCop: preview.grossIncomeCop,
     commissionAmountCop: preview.commissionAmountCop,
@@ -224,6 +228,7 @@ export function buildInvoiceFromHistoricalSettlement(
     statusLabel: `EJECUTADO // LIQUIDACION CERRADA`,
     owner: bundle.selected_owner,
     lines,
+    handoverNotes: settlement.handover_notes_snapshot ?? [],
     maintenances,
     grossIncomeCop: settlement.gross_income_cop,
     commissionAmountCop: settlement.commission_amount_cop,
@@ -437,11 +442,14 @@ export function generateSettlementPdfContent(
               : ab.origin_period_month
                 ? ` [${ab.origin_period_month}]`
                 : '';
+            const descTag = ab.payment_description
+              ? ` | Desc: ${ab.payment_description}`
+              : '';
             y -= 10;
             drawText(
               58,
               y,
-              `-> Abono #${idx + 1} (${ab.payment_date})${moraTag} [${ab.payment_method}]: ${formatCop(ab.owner_dividend_cop)}`,
+              `-> Abono #${idx + 1} (${ab.payment_date})${moraTag} [${ab.payment_method}]${descTag}: ${formatCop(ab.owner_dividend_cop)}`,
               'F3',
               7,
               [0.32, 0.35, 0.42]
@@ -452,6 +460,30 @@ export function generateSettlementPdfContent(
 
       drawLine(36, y - 4, 576, y - 4);
       y -= 15;
+    }
+  }
+
+  if (doc.handoverNotes && doc.handoverNotes.length > 0) {
+    y -= 4;
+    drawText(
+      42,
+      y,
+      `NOTAS DE LIQUIDACION POR ENTREGA DE INMUEBLE (${doc.periodMonth}):`,
+      'F2',
+      7.5,
+      [0.72, 0.45, 0.05]
+    );
+    y -= 11;
+    for (const note of doc.handoverNotes) {
+      drawText(
+        50,
+        y,
+        `* ${note.note_text}`,
+        'F3',
+        6.8,
+        [0.45, 0.28, 0.05]
+      );
+      y -= 10;
     }
   }
 

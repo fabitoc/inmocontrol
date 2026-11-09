@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ExecutePropertyHandoverInput,
+  HandoverSettlementNote,
   NewRentPaymentInput,
   OwnerDashboardBundle,
   Property,
@@ -17,7 +19,9 @@ import {
 
 interface AdministracionAlertasViewProps {
   bundle: OwnerDashboardBundle;
-  onExecuteHandover: (propertyId: number) => void;
+  onExecuteHandover: (
+    input: number | ExecutePropertyHandoverInput
+  ) => HandoverSettlementNote | null | void;
   onRecordPayment?: (input: NewRentPaymentInput) => void;
 }
 
@@ -221,7 +225,21 @@ export const AdministracionAlertasView: React.FC<
   const [handoverPropertyId, setHandoverPropertyId] = useState<number>(
     occupiedRentableProps[0]?.id ?? bundle.properties[0]?.id ?? 2
   );
+  const [handoverAbonoCop, setHandoverAbonoCop] = useState<number>(0);
+  const [handoverPaymentMethod, setHandoverPaymentMethod] =
+    useState<string>('TRANSACCIÓN');
+  const [handoverPaymentDesc, setHandoverPaymentDesc] = useState<string>('');
   const [handoverFeedback, setHandoverFeedback] = useState<string | null>(null);
+
+  const handoverPaymentState = getPropertyTenantPaymentState(
+    Number(handoverPropertyId),
+    bundle.properties,
+    bundle.contracts,
+    bundle.payments
+  );
+  const handoverOwedMonths = handoverPaymentState.periodBalances
+    .filter((b) => b.remainingBalanceCop > 0)
+    .map((b) => b.periodMonth);
 
   useEffect(() => {
     if (occupiedRentableProps.length > 0) {
@@ -239,9 +257,19 @@ export const AdministracionAlertasView: React.FC<
       (p) => p.id === Number(handoverPropertyId)
     );
     if (!targetProp) return;
-    onExecuteHandover(targetProp.id);
+    const abonoNum = Math.max(0, Math.round(Number(handoverAbonoCop || 0)));
+    const note = onExecuteHandover({
+      property_id: targetProp.id,
+      abono_amount_cop: abonoNum,
+      payment_method: handoverPaymentMethod,
+      payment_description: handoverPaymentDesc.trim() || undefined,
+    });
+    setHandoverAbonoCop(0);
+    setHandoverPaymentDesc('');
     setHandoverFeedback(
-      `BEGIN TRANSACTION ... COMMIT ejecutado: Contrato finalizado y activo "${targetProp.title}" liberado a estado [DISPONIBLE].`
+      note
+        ? `BEGIN TRANSACTION ... COMMIT ejecutado: Contrato finalizado, activo "${targetProp.title}" liberado a estado [DISPONIBLE] y registrada nota en Liquidaciones: ${note.note_text}`
+        : `BEGIN TRANSACTION ... COMMIT ejecutado: Contrato finalizado y activo "${targetProp.title}" liberado a estado [DISPONIBLE] (Inquilino a paz y salvo).`
     );
   };
 
@@ -590,6 +618,82 @@ export const AdministracionAlertasView: React.FC<
               )}
             </select>
           </label>
+
+          {/* Peace & Clearance Status + Handover Debt / Abono Registration */}
+          <div
+            data-testid="handover-debt-status"
+            className={`p-3 border font-mono text-xs space-y-3 ${
+              handoverPaymentState.isAlDia
+                ? 'bg-[#00FF66]/10 border-[#00FF66]/40 text-[#00FF66]'
+                : 'bg-[#ff007f]/10 border-[#ff007f]/60 text-white'
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-bold">
+                {handoverPaymentState.isAlDia
+                  ? '[ INQUILINO A PAZ Y SALVO ($0 COP PENDIENTE) ]'
+                  : `[ INQUILINO NO ESTÁ A PAZ Y SALVO — DEBE ${formatCop(handoverPaymentState.totalRemainingDebtCop)} EN MESES: ${handoverOwedMonths.join(', ')} ]`}
+              </span>
+              {!handoverPaymentState.isAlDia && (
+                <span className="text-[11px] text-[#ffb800]">
+                  Se registrará nota en Liquidación con meses adeudados y/o abono
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-white pt-1">
+              <label className="block">
+                <span className="text-[#9ca3af] uppercase block mb-1 text-[11px]">
+                  Abono a la deuda en entrega ($ COP)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step={50000}
+                  aria-label="Abono a la deuda en entrega ($ COP)"
+                  data-testid="input-handover-abono-cop"
+                  value={handoverAbonoCop}
+                  onChange={(e) => setHandoverAbonoCop(Number(e.target.value))}
+                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2.5 py-1.5 text-[#00eefc] font-bold"
+                />
+                <span className="block mt-0.5 text-[10px] text-[#00eefc]">
+                  {formatCop(handoverAbonoCop)} ·{' '}
+                  {formatCopInWords(handoverAbonoCop)}
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="text-[#9ca3af] uppercase block mb-1 text-[11px]">
+                  Medio de Pago del Abono
+                </span>
+                <select
+                  aria-label="Medio de Pago del Abono"
+                  data-testid="select-handover-payment-method"
+                  value={handoverPaymentMethod}
+                  onChange={(e) => setHandoverPaymentMethod(e.target.value)}
+                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2.5 py-1.5 text-white"
+                >
+                  <option value="EFECTIVO">EFECTIVO</option>
+                  <option value="TRANSACCIÓN">TRANSACCIÓN</option>
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-[#9ca3af] uppercase block mb-1 text-[11px]">
+                  Descripción del Pago / Nota de Entrega
+                </span>
+                <input
+                  type="text"
+                  aria-label="Descripción del Pago / Nota de Entrega"
+                  data-testid="input-handover-payment-description"
+                  value={handoverPaymentDesc}
+                  onChange={(e) => setHandoverPaymentDesc(e.target.value)}
+                  placeholder="Ej. Abono en entrega por canon pendiente..."
+                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2.5 py-1.5 text-white"
+                />
+              </label>
+            </div>
+          </div>
 
           {handoverFeedback && (
             <div

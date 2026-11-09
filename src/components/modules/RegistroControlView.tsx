@@ -9,6 +9,7 @@ import {
   PropertyCoOwner,
   PropertyStatus,
   TenantContract,
+  UpdatePropertyInput,
 } from '../../types/domain';
 import {
   calculatePropertyCommission,
@@ -36,6 +37,7 @@ interface RegistroControlViewProps {
   bundle: OwnerDashboardBundle;
   onCreateOwner: (input: NewOwnerInput) => void;
   onCreateProperty: (input: NewPropertyInput) => Property | void;
+  onUpdateProperty?: (input: UpdatePropertyInput) => Property | void;
   onCreateContract: (input: NewContractInput) => TenantContract | void;
   onRecordPayment: (input: NewRentPaymentInput) => void;
 }
@@ -52,7 +54,7 @@ const TABS: Array<{
     id: 'propietario',
     code: '01',
     label: '01 // Registro de Propietario',
-    subtitle: 'TABLA: owners · Directorio Bancario',
+    subtitle: 'TABLA: owners · Directorio de Propietarios',
   },
   {
     id: 'inmueble',
@@ -72,6 +74,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
   bundle,
   onCreateOwner,
   onCreateProperty,
+  onUpdateProperty,
   onCreateContract,
   onRecordPayment,
 }) => {
@@ -82,9 +85,6 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
   const [ownerDoc, setOwnerDoc] = useState('');
   const [ownerPhone, setOwnerPhone] = useState('');
   const [ownerEmail, setOwnerEmail] = useState('');
-  const [bankName, setBankName] = useState('Bancolombia');
-  const [bankType, setBankType] = useState('AHORROS');
-  const [bankAccount, setBankAccount] = useState('');
   const [ownerCutoffDay, setOwnerCutoffDay] = useState<number>(5);
   const [ownerFeedback, setOwnerFeedback] = useState<string | null>(null);
 
@@ -110,6 +110,49 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
   const [expandedParentIds, setExpandedParentIds] = useState<
     Record<number, boolean>
   >({});
+
+  // Root Property (Matriz Principal / Inmueble Principal) Inline Edit State
+  const [editingPropertyId, setEditingPropertyId] = useState<number | null>(
+    null
+  );
+  const [editPropCode, setEditPropCode] = useState('');
+  const [editPropTitle, setEditPropTitle] = useState('');
+  const [editPropAddress, setEditPropAddress] = useState('');
+  const [editPropType, setEditPropType] = useState('APARTAMENTO');
+  const [editPropRentCop, setEditPropRentCop] = useState<number>(0);
+  const [editPropCommissionPct, setEditPropCommissionPct] = useState<number>(8);
+  const [editPropFeedback, setEditPropFeedback] = useState<string | null>(null);
+
+  const handleStartEditRootProperty = (prop: Property) => {
+    setEditingPropertyId(prop.id);
+    setEditPropCode(prop.code);
+    setEditPropTitle(prop.title);
+    setEditPropAddress(prop.address);
+    setEditPropType(prop.property_type);
+    setEditPropRentCop(prop.base_rent_cop);
+    setEditPropCommissionPct(prop.commission_pct);
+    setEditPropFeedback(null);
+  };
+
+  const handleSaveEditRootProperty = (prop: Property) => {
+    onUpdateProperty?.({
+      id: prop.id,
+      code: editPropCode,
+      title: editPropTitle,
+      address: editPropAddress,
+      property_type:
+        prop.property_type === 'EDIFICIO MATRIZ'
+          ? 'EDIFICIO MATRIZ'
+          : editPropType,
+      base_rent_cop:
+        prop.property_type === 'EDIFICIO MATRIZ' ? 0 : Number(editPropRentCop),
+      commission_pct: Number(editPropCommissionPct),
+    });
+    setEditPropFeedback(
+      `Propiedad principal "${editPropTitle.trim() || prop.title}" actualizada en SQLite.`
+    );
+    setEditingPropertyId(null);
+  };
 
   const isParentExpanded = (parentId: number) =>
     expandedParentIds[parentId] ?? true;
@@ -394,9 +437,9 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       document_id: ownerDoc.trim(),
       phone: ownerPhone.trim() || '+57 300 000 0000',
       email: ownerEmail.trim() || 'contacto@inmocontrol.co',
-      bank_name: bankName,
-      bank_account_type: bankType,
-      bank_account_number: bankAccount.trim() || '000-000000-00',
+      bank_name: 'N/A',
+      bank_account_type: 'N/A',
+      bank_account_number: 'N/A',
       cutoff_day: Number(ownerCutoffDay),
     });
     setOwnerFeedback(
@@ -406,7 +449,6 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
     setOwnerDoc('');
     setOwnerPhone('');
     setOwnerEmail('');
-    setBankAccount('');
   };
 
   const handlePropertySubmit = (e: React.FormEvent) => {
@@ -952,50 +994,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                 />
               </label>
 
-              <label className="block">
-                <span className="text-[#9ca3af] uppercase block mb-1">
-                  Entidad Bancaria
-                </span>
-                <select
-                  value={bankName}
-                  onChange={(e) => setBankName(e.target.value)}
-                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
-                >
-                  <option value="Bancolombia">Bancolombia</option>
-                  <option value="Banco de Bogotá">Banco de Bogotá</option>
-                  <option value="Davivienda">Davivienda</option>
-                  <option value="BBVA Colombia">BBVA Colombia</option>
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="text-[#9ca3af] uppercase block mb-1">
-                  Tipo de Cuenta
-                </span>
-                <select
-                  value={bankType}
-                  onChange={(e) => setBankType(e.target.value)}
-                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
-                >
-                  <option value="AHORROS">AHORROS</option>
-                  <option value="CORRIENTE">CORRIENTE</option>
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="text-[#9ca3af] uppercase block mb-1">
-                  Número de Cuenta para Dispersión
-                </span>
-                <input
-                  type="text"
-                  value={bankAccount}
-                  onChange={(e) => setBankAccount(e.target.value)}
-                  placeholder="412-990123-88"
-                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
-                />
-              </label>
-
-              <div className="block">
+              <div className="block sm:col-span-2">
                 <div className="flex items-center justify-between mb-1">
                   <label
                     htmlFor="select-cutoff-day"
@@ -1077,11 +1076,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                     <div className="text-[#9ca3af] mt-1 grid grid-cols-1 sm:grid-cols-2 gap-1">
                       <span>DOC: {owner.document_id}</span>
                       <span>TEL: {owner.phone}</span>
-                      <span>EMAIL: {owner.email}</span>
-                      <span>
-                        BANCO: {owner.bank_name} ({owner.bank_account_type}) ·{' '}
-                        {owner.bank_account_number}
-                      </span>
+                      <span className="sm:col-span-2">EMAIL: {owner.email}</span>
                       <span className="text-[#ffb800] font-bold sm:col-span-2">
                         FECHA DE CORTE / LIQUIDACIÓN: Día {owner.cutoff_day ?? 5}{' '}
                         de cada mes
@@ -1762,6 +1757,15 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
               </span>
             </div>
 
+            {editPropFeedback && (
+              <div
+                data-testid="edit-root-property-feedback"
+                className="p-2.5 bg-[#00FF66]/10 border border-[#00FF66]/40 text-xs font-mono text-[#00FF66]"
+              >
+                {editPropFeedback}
+              </div>
+            )}
+
             <div className="space-y-2.5">
               {bundle.properties
                 .filter(
@@ -1783,6 +1787,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   );
                   const hasChildren = childSubdivisions.length > 0;
                   const isExpanded = isParentExpanded(prop.id);
+                  const isEditingThis = editingPropertyId === prop.id;
 
                   return (
                     <div key={prop.id} className="space-y-2">
@@ -1819,7 +1824,10 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                               <span className="text-[#00eefc] font-bold">
                                 [{prop.code}]
                               </span>{' '}
-                              <span className="text-white font-bold">
+                              <span
+                                className="text-white font-bold"
+                                data-testid={`summary-root-title-${prop.id}`}
+                              >
                                 {prop.title}
                               </span>
                             </div>
@@ -1838,7 +1846,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                         <div className="text-[#9ca3af] mt-1.5 flex items-center justify-between">
                           <span>
                             {prop.property_type} · Com:{' '}
-                            {prop.commission_pct.toFixed(1)}%
+                            {prop.commission_pct.toFixed(1)}% · {prop.address}
                           </span>
                           <span className="text-white font-bold">
                             {hasChildren
@@ -1871,18 +1879,156 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                             )}
                           </div>
 
-                          {hasChildren && (
+                          <div className="flex items-center gap-2">
                             <button
                               type="button"
-                              onClick={() => toggleParentSummary(prop.id)}
-                              className="px-2 py-0.5 bg-[#1a1b20] border border-[#00eefc]/60 text-[10px] text-[#00eefc] font-bold hover:bg-[#00eefc]/15 uppercase"
+                              data-testid={`edit-root-property-btn-${prop.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (isEditingThis) {
+                                  setEditingPropertyId(null);
+                                } else {
+                                  handleStartEditRootProperty(prop);
+                                }
+                              }}
+                              className="px-2 py-0.5 bg-[#1a1b20] border border-[#ffb800]/60 text-[10px] text-[#ffb800] font-bold hover:bg-[#ffb800]/15 uppercase"
                             >
-                              {isExpanded
-                                ? `Contraer (${childSubdivisions.length})`
-                                : `Desplegar (${childSubdivisions.length})`}
+                              {isEditingThis
+                                ? '[ CANCELAR EDICIÓN ]'
+                                : prop.property_type === 'EDIFICIO MATRIZ' ||
+                                    hasChildren
+                                  ? '[ EDITAR MATRIZ PRINCIPAL ]'
+                                  : '[ EDITAR INMUEBLE PRINCIPAL ]'}
                             </button>
-                          )}
+
+                            {hasChildren && (
+                              <button
+                                type="button"
+                                onClick={() => toggleParentSummary(prop.id)}
+                                className="px-2 py-0.5 bg-[#1a1b20] border border-[#00eefc]/60 text-[10px] text-[#00eefc] font-bold hover:bg-[#00eefc]/15 uppercase"
+                              >
+                                {isExpanded
+                                  ? `Contraer (${childSubdivisions.length})`
+                                  : `Desplegar (${childSubdivisions.length})`}
+                              </button>
+                            )}
+                          </div>
                         </div>
+
+                        {isEditingThis && (
+                          <div
+                            data-testid={`edit-root-property-panel-${prop.id}`}
+                            className="mt-3 pt-3 border-t border-[#ffb800]/40 bg-[#0d0e12] p-3 space-y-2.5"
+                          >
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-[#ffb800]">
+                              Edición de{' '}
+                              {prop.property_type === 'EDIFICIO MATRIZ' ||
+                              hasChildren
+                                ? 'Matriz Principal'
+                                : 'Inmueble Principal'}{' '}
+                              ([{prop.code}])
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <label className="block">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  Código Principal
+                                </span>
+                                <input
+                                  type="text"
+                                  data-testid={`edit-prop-code-${prop.id}`}
+                                  value={editPropCode}
+                                  onChange={(e) =>
+                                    setEditPropCode(e.target.value)
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  Título / Nombre Principal
+                                </span>
+                                <input
+                                  type="text"
+                                  data-testid={`edit-prop-title-${prop.id}`}
+                                  value={editPropTitle}
+                                  onChange={(e) =>
+                                    setEditPropTitle(e.target.value)
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
+                                />
+                              </label>
+                              <label className="block sm:col-span-2">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  Dirección Física
+                                </span>
+                                <input
+                                  type="text"
+                                  data-testid={`edit-prop-address-${prop.id}`}
+                                  value={editPropAddress}
+                                  onChange={(e) =>
+                                    setEditPropAddress(e.target.value)
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  % Comisión Base
+                                </span>
+                                <input
+                                  type="number"
+                                  step={0.5}
+                                  min={1}
+                                  max={25}
+                                  data-testid={`edit-prop-commission-${prop.id}`}
+                                  value={editPropCommissionPct}
+                                  onChange={(e) =>
+                                    setEditPropCommissionPct(
+                                      Number(e.target.value)
+                                    )
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
+                                />
+                              </label>
+                              {!hasChildren &&
+                                prop.property_type !== 'EDIFICIO MATRIZ' && (
+                                  <label className="block">
+                                    <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                      Canon Base Mensual ($ COP)
+                                    </span>
+                                    <input
+                                      type="number"
+                                      data-testid={`edit-prop-rent-${prop.id}`}
+                                      value={editPropRentCop}
+                                      onChange={(e) =>
+                                        setEditPropRentCop(
+                                          Number(e.target.value)
+                                        )
+                                      }
+                                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
+                                    />
+                                  </label>
+                                )}
+                            </div>
+                            <div className="flex justify-end gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => setEditingPropertyId(null)}
+                                className="px-2.5 py-1 bg-[#14151a] border border-[#292a2e] text-[10px] text-[#9ca3af] hover:text-white uppercase"
+                              >
+                                [ CANCELAR ]
+                              </button>
+                              <button
+                                type="button"
+                                data-testid={`save-edit-property-btn-${prop.id}`}
+                                onClick={() => handleSaveEditRootProperty(prop)}
+                                className="px-3 py-1 bg-[#ffb800] text-[#0d0e12] text-[10px] font-bold uppercase hover:bg-[#ffb800]/90"
+                              >
+                                [ GUARDAR CAMBIOS ]
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Subdivisions Accordion Drawer */}

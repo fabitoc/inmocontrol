@@ -1,4 +1,6 @@
 import {
+  ExecutePropertyHandoverInput,
+  HandoverSettlementNote,
   MaintenanceExpense,
   NewContractInput,
   NewMaintenanceInput,
@@ -12,6 +14,7 @@ import {
   Settlement,
   SmartAlert,
   TenantContract,
+  UpdatePropertyInput,
   WeeklyTelemetryPoint,
 } from '../types/domain';
 
@@ -51,6 +54,7 @@ export interface OwnerSettlementPreview {
   periodMonth: string;
   lines: SettlementPreviewLine[];
   activeMoraBalances?: ActiveMoraBalanceSnapshot[];
+  handoverNotes?: HandoverSettlementNote[];
   pendingMaintenances: MaintenanceExpense[];
   grossIncomeCop: number;
   commissionAmountCop: number;
@@ -162,7 +166,8 @@ export function calculateOwnerSettlementPreview(
   maintenances: MaintenanceExpense[],
   periodMonth: string,
   contracts: TenantContract[] = [],
-  settlements: Settlement[] = []
+  settlements: Settlement[] = [],
+  handoverNotes: HandoverSettlementNote[] = []
 ): OwnerSettlementPreview {
   const lines: SettlementPreviewLine[] = [];
   let grossIncomeCop = 0;
@@ -305,10 +310,18 @@ export function calculateOwnerSettlementPreview(
     netPayableCop
   );
 
+  const periodHandoverNotes = handoverNotes.filter(
+    (hn) =>
+      hn.settlement_period_month === periodMonth &&
+      propById.has(hn.property_id) &&
+      getOwnerSharePct(propById.get(hn.property_id)!, ownerId) > 0
+  );
+
   return {
     periodMonth,
     lines,
     activeMoraBalances,
+    handoverNotes: periodHandoverNotes,
     pendingMaintenances,
     grossIncomeCop,
     commissionAmountCop,
@@ -600,12 +613,21 @@ export function resolveActiveSettlementPeriodForOwner(
   payments: RentPayment[],
   maintenances: MaintenanceExpense[],
   settlements: Settlement[],
-  now: Date = new Date()
+  now: Date = new Date(),
+  handoverNotes: HandoverSettlementNote[] = []
 ): string {
   const currentSystemPeriod = getCurrentPeriodMonth(now);
   const settledPeriods = new Set(
     settlements.filter((s) => s.owner_id === ownerId).map((s) => s.period_month)
   );
+
+  const unsettledHandoverPeriods = handoverNotes
+    .map((hn) => hn.settlement_period_month)
+    .filter((p) => p && !settledPeriods.has(p));
+
+  if (unsettledHandoverPeriods.includes(currentSystemPeriod)) {
+    return currentSystemPeriod;
+  }
 
   const unsettledPaymentPeriods = payments
     .filter(
@@ -1257,6 +1279,7 @@ interface LocalDatabaseState {
   payments: RentPayment[];
   maintenances: MaintenanceExpense[];
   settlements: Settlement[];
+  handoverNotes: HandoverSettlementNote[];
   backupSnapshots: string[];
 }
 
@@ -1829,6 +1852,7 @@ function createInitialSeedState(): LocalDatabaseState {
     payments,
     maintenances,
     settlements,
+    handoverNotes: [],
     backupSnapshots: [
       '%LocalAppData%\\InmoControl\\backups\\inmo_backup_20261015_080000_000.db',
     ],
@@ -1873,6 +1897,9 @@ function loadPersistedState(): LocalDatabaseState {
               }
               return s;
             });
+          }
+          if (!Array.isArray(parsed.handoverNotes)) {
+            parsed.handoverNotes = [];
           }
           return parsed;
         }
@@ -2000,6 +2027,10 @@ class InmoRepositoryImpl {
           b.period_month.localeCompare(a.period_month) || b.id - a.id
       );
 
+    const handoverNotes = (this.state.handoverNotes ?? []).filter((hn) =>
+      propIds.has(hn.property_id)
+    );
+
     const elapsedMs = Math.max(
       0.4,
       Math.round((performance.now() - start) * 100) / 100
@@ -2013,6 +2044,7 @@ class InmoRepositoryImpl {
       payments,
       maintenances,
       settlements,
+      handover_notes: handoverNotes,
       agency_total_properties: participation.agencyRentableCount,
       owner_property_count: participation.ownerRentableCount,
       agency_participation_pct: participation.participationByCountPct,
@@ -2048,6 +2080,58 @@ class InmoRepositoryImpl {
     this.state.properties.push(prop);
     this.persistState();
     return prop;
+  }
+
+  public updateProperty(input: UpdatePropertyInput): Property {
+    const prop = this.state.properties.find((p) => p.id === input.id);
+    if (!prop) {
+      throw new Error(`No existe el inmueble con ID #${input.id}`);
+    }
+    const oldTitle = prop.title;
+    const oldAddress = prop.address;
+
+    if (input.code !== undefined && input.code.trim()) {
+      prop.code = input.code.trim().toUpperCase();
+    }
+    if (input.title !== undefined && input.title.trim()) {
+      prop.title = input.title.trim();
+    }
+    if (input.address !== undefined && input.address.trim()) {
+      prop.address = input.address.trim();
+    }
+    if (input.property_type !== undefined && input.property_type.trim()) {
+      prop.property_type = input.property_type.trim();
+    }
+    if (input.base_rent_cop !== undefined) {
+      prop.base_rent_cop = Math.max(0, Number(input.base_rent_cop));
+    }
+    if (input.commission_pct !== undefined) {
+      prop.commission_pct = Math.max(0, Number(input.commission_pct));
+    }
+    if (input.co_owners !== undefined) {
+      prop.co_owners = input.co_owners;
+    }
+
+    // Propagate updated address (and prefix title if it was a parent matrix) to child sub-units
+    if (prop.parent_property_id === null) {
+      for (const child of this.state.properties) {
+        if (child.parent_property_id === prop.id) {
+          if (input.address !== undefined && child.address === oldAddress) {
+            child.address = prop.address;
+          }
+          if (
+            input.title !== undefined &&
+            oldTitle &&
+            child.title.startsWith(`${oldTitle} - `)
+          ) {
+            child.title = `${prop.title} - ${child.title.slice(oldTitle.length + 3)}`;
+          }
+        }
+      }
+    }
+
+    this.persistState();
+    return { ...prop };
   }
 
   public createTenantContract(input: NewContractInput): TenantContract {
@@ -2270,7 +2354,8 @@ class InmoRepositoryImpl {
         ownerMaintenances,
         periodMonth,
         ownerContracts,
-        this.state.settlements
+        this.state.settlements,
+        this.state.handoverNotes ?? []
       );
 
       const propById = new Map(ownerProps.map((p) => [p.id, p]));
@@ -2291,6 +2376,7 @@ class InmoRepositoryImpl {
           reference_code: rp.reference_code,
           payment_date: rp.payment_date,
           payment_method: rp.payment_method,
+          payment_description: rp.payment_description,
           origin_period_month: rp.period_month,
           is_mora_payment: rp.period_month < periodMonth,
           gross_amount_cop: rp.gross_amount_cop,
@@ -2342,6 +2428,7 @@ class InmoRepositoryImpl {
         created_at: new Date().toISOString(),
         lines_snapshot: linesSnapshot,
         maintenances_snapshot: maintenancesSnapshot,
+        handover_notes_snapshot: preview.handoverNotes ?? [],
       };
 
       this.state.settlements.push(settlement);
@@ -2399,16 +2486,156 @@ class InmoRepositoryImpl {
 
   /**
    * Executes a transactional property handover (`BEGIN TRANSACTION ... COMMIT`):
+   * - If the tenant makes a partial or full payment (`abono_amount_cop > 0`) during handover, records the payment with `payment_description` so it adds to the active settlement's gross income.
+   * - If the tenant is NOT a paz y salvo (still owes months/balance) or paid a handover abono, records a `HandoverSettlementNote` in the active settlement period detailing the owed months, remaining balance, and any abono + payment description.
    * - Terminates active/overdue contracts on `propertyId` (`FINALIZADO`).
    * - Transitions property status to `DISPONIBLE`.
    */
-  public executePropertyHandover(propertyId: number): void {
+  public executePropertyHandover(
+    propertyIdOrInput: number | ExecutePropertyHandoverInput
+  ): HandoverSettlementNote | null {
     const snapshot = JSON.stringify(this.state);
     try {
+      const normalizedInput: ExecutePropertyHandoverInput =
+        typeof propertyIdOrInput === 'number'
+          ? { property_id: propertyIdOrInput }
+          : propertyIdOrInput;
+      const propertyId = Number(normalizedInput.property_id);
+      const abonoAmountCop = Math.max(
+        0,
+        Number(normalizedInput.abono_amount_cop || 0)
+      );
+      const paymentMethod = normalizedInput.payment_method || 'TRANSACCIÓN';
+      const paymentDescription =
+        normalizedInput.payment_description?.trim() ||
+        'Abono en entrega de inmueble';
+
       const prop = this.state.properties.find((p) => p.id === propertyId);
       if (!prop) {
         throw new Error(`Property ${propertyId} does not exist`);
       }
+
+      const activeContract =
+        this.state.contracts.find(
+          (c) =>
+            c.property_id === propertyId &&
+            (c.status === 'ACTIVO' || c.status === 'MORA')
+        ) ?? null;
+
+      const currentPeriod = getCurrentPeriodMonth();
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const primaryOwnerId = prop.owner_id ?? 1;
+      const settlementPeriodMonth = resolveNextUnsettledCutoffPeriod(
+        primaryOwnerId,
+        currentPeriod,
+        this.state.settlements
+      );
+
+      const initialState = getPropertyTenantPaymentState(
+        propertyId,
+        this.state.properties,
+        this.state.contracts,
+        this.state.payments
+      );
+
+      // Apply handover abono across owed periods (oldest owed period first) so it adds to the settlement gross income with the payment description
+      let appliedAbonoCop = 0;
+      if (abonoAmountCop > 0 && activeContract) {
+        let remainingToApply = abonoAmountCop;
+        const owedBalances = [...initialState.periodBalances]
+          .filter((b) => b.remainingBalanceCop > 0)
+          .sort((a, b) => a.periodMonth.localeCompare(b.periodMonth));
+
+        for (const bal of owedBalances) {
+          if (remainingToApply <= 0) break;
+          const chunk = Math.min(remainingToApply, bal.remainingBalanceCop);
+          if (chunk > 0) {
+            this.recordRentPayment({
+              contract_id: activeContract.id,
+              property_id: propertyId,
+              period_month: bal.periodMonth,
+              gross_amount_cop: chunk,
+              payment_date: todayIso,
+              payment_method: paymentMethod,
+              reference_code: `ENTREGA-${prop.code}-${bal.periodMonth}`,
+              payment_description: paymentDescription,
+              status: 'PAGADO',
+            });
+            appliedAbonoCop += chunk;
+            remainingToApply -= chunk;
+          }
+        }
+
+        // If no open period balance matched or user paid an extra handover abono, record it on the active period
+        if (appliedAbonoCop === 0 && abonoAmountCop > 0) {
+          const nextId =
+            this.state.payments.reduce((max, rp) => Math.max(max, rp.id), 0) +
+            1;
+          this.state.payments.push({
+            id: nextId,
+            contract_id: activeContract.id,
+            property_id: propertyId,
+            period_month: currentPeriod,
+            settlement_period_month: settlementPeriodMonth,
+            gross_amount_cop: abonoAmountCop,
+            payment_date: todayIso,
+            payment_method: paymentMethod,
+            reference_code: `ENTREGA-${prop.code}-${nextId}`,
+            payment_description: paymentDescription,
+            status: 'PAGADO',
+          });
+          appliedAbonoCop = abonoAmountCop;
+        }
+      }
+
+      const postAbonoState = getPropertyTenantPaymentState(
+        propertyId,
+        this.state.properties,
+        this.state.contracts,
+        this.state.payments
+      );
+      const owedMonths = postAbonoState.periodBalances
+        .filter((b) => b.remainingBalanceCop > 0)
+        .map((b) => b.periodMonth);
+      const remainingDebtCop = postAbonoState.totalRemainingDebtCop;
+
+      let createdNote: HandoverSettlementNote | null = null;
+      if (
+        activeContract &&
+        (remainingDebtCop > 0 || owedMonths.length > 0 || appliedAbonoCop > 0)
+      ) {
+        if (!Array.isArray(this.state.handoverNotes)) {
+          this.state.handoverNotes = [];
+        }
+        const nextNoteId =
+          this.state.handoverNotes.reduce((max, n) => Math.max(max, n.id), 0) +
+          1;
+        const owedText =
+          owedMonths.length > 0
+            ? `Quedó debiendo los meses: ${owedMonths.join(', ')} (Saldo pendiente: ${formatCop(remainingDebtCop)})`
+            : 'Saldo cubierto con el abono en entrega ($0 COP pendiente)';
+        const abonoText =
+          appliedAbonoCop > 0
+            ? ` · Abonó a la deuda: ${formatCop(appliedAbonoCop)} (${paymentMethod} — Descripción: ${paymentDescription})`
+            : ' · Sin abono registrado en la entrega';
+
+        createdNote = {
+          id: nextNoteId,
+          property_id: prop.id,
+          property_code: prop.code,
+          property_title: prop.title,
+          tenant_name: activeContract.tenant_name,
+          handover_date: todayIso,
+          settlement_period_month: settlementPeriodMonth,
+          owed_months: owedMonths,
+          remaining_debt_cop: remainingDebtCop,
+          abono_amount_cop: appliedAbonoCop,
+          payment_description: appliedAbonoCop > 0 ? paymentDescription : '',
+          note_text: `NOTA DE ENTREGA DE INMUEBLE: [${prop.code}] ${prop.title} — Inquilino: ${activeContract.tenant_name} · ${owedText}${abonoText}.`,
+        };
+        this.state.handoverNotes.push(createdNote);
+      }
+
       prop.status = 'DISPONIBLE';
 
       for (const contract of this.state.contracts) {
@@ -2420,6 +2647,7 @@ class InmoRepositoryImpl {
         }
       }
       this.persistState();
+      return createdNote;
     } catch (err) {
       this.state = JSON.parse(snapshot);
       throw err;

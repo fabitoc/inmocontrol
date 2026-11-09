@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import {
+  ExecutePropertyHandoverInput,
   ModuleId,
   NewContractInput,
   NewMaintenanceInput,
   NewOwnerInput,
   NewPropertyInput,
   NewRentPaymentInput,
+  UpdatePropertyInput,
 } from './types/domain';
 import { inmoRepository } from './services/inmoService';
 import { DashboardAnaliticoView } from './components/modules/DashboardAnaliticoView';
@@ -70,6 +72,12 @@ export const App: React.FC = () => {
     return created;
   };
 
+  const handleUpdateProperty = (input: UpdatePropertyInput) => {
+    const updated = inmoRepository.updateProperty(input);
+    bumpRevision();
+    return updated;
+  };
+
   const handleCreateContract = (input: NewContractInput) => {
     const created = inmoRepository.createTenantContract(input);
     bumpRevision();
@@ -86,9 +94,12 @@ export const App: React.FC = () => {
     bumpRevision();
   };
 
-  const handleExecuteHandover = (propertyId: number) => {
-    inmoRepository.executePropertyHandover(propertyId);
+  const handleExecuteHandover = (
+    input: number | ExecutePropertyHandoverInput
+  ) => {
+    const note = inmoRepository.executePropertyHandover(input);
     bumpRevision();
+    return note;
   };
 
   const handleExecuteSettlement = (ownerId: number, periodMonth: string) => {
@@ -244,6 +255,7 @@ export const App: React.FC = () => {
                 bundle={bundle}
                 onCreateOwner={handleCreateOwner}
                 onCreateProperty={handleCreateProperty}
+                onUpdateProperty={handleUpdateProperty}
                 onCreateContract={handleCreateContract}
                 onRecordPayment={handleRecordPayment}
               />

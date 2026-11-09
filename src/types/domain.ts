@@ -68,6 +68,17 @@ export interface NewPropertyInput {
   status: PropertyStatus;
 }
 
+export interface UpdatePropertyInput {
+  id: number;
+  code?: string;
+  title?: string;
+  address?: string;
+  property_type?: string;
+  base_rent_cop?: number;
+  commission_pct?: number;
+  co_owners?: PropertyCoOwner[];
+}
+
 export type ContractStatus = 'ACTIVO' | 'FINALIZADO' | 'MORA';
 
 export interface TenantContract {
@@ -110,6 +121,7 @@ export interface RentPayment {
   payment_date: string;
   payment_method: string;
   reference_code: string;
+  payment_description?: string;
   status: PaymentStatus;
   settlement_id?: number | null;
   settled_owner_ids?: number[];
@@ -123,6 +135,7 @@ export interface NewRentPaymentInput {
   payment_date: string;
   payment_method: string;
   reference_code?: string;
+  payment_description?: string;
   status: PaymentStatus;
 }
 
@@ -162,10 +175,34 @@ export interface SettlementAbonoSnapshot {
   reference_code: string;
   payment_date: string;
   payment_method: string;
+  payment_description?: string;
   origin_period_month?: string;
   is_mora_payment?: boolean;
   gross_amount_cop: number;
   owner_dividend_cop: number;
+}
+
+export interface HandoverSettlementNote {
+  id: number;
+  property_id: number;
+  property_code: string;
+  property_title: string;
+  tenant_name: string;
+  handover_date: string;
+  settlement_period_month: string;
+  owed_months: string[];
+  remaining_debt_cop: number;
+  abono_amount_cop: number;
+  payment_description: string;
+  note_text: string;
+  settled_owner_ids?: number[];
+}
+
+export interface ExecutePropertyHandoverInput {
+  property_id: number;
+  abono_amount_cop?: number;
+  payment_method?: string;
+  payment_description?: string;
 }
 
 export interface SettlementLineSnapshot {
@@ -217,6 +254,7 @@ export interface Settlement {
   created_at: string;
   lines_snapshot?: SettlementLineSnapshot[];
   maintenances_snapshot?: SettlementMaintenanceSnapshot[];
+  handover_notes_snapshot?: HandoverSettlementNote[];
 }
 
 export interface SmartAlert {
@@ -251,6 +289,7 @@ export interface OwnerDashboardBundle {
   payments: RentPayment[];
   maintenances: MaintenanceExpense[];
   settlements: Settlement[];
+  handover_notes?: HandoverSettlementNote[];
   agency_total_properties: number;
   owner_property_count: number;
   agency_participation_pct: number;
