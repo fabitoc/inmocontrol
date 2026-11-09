@@ -162,6 +162,8 @@ export interface SettlementAbonoSnapshot {
   reference_code: string;
   payment_date: string;
   payment_method: string;
+  origin_period_month?: string;
+  is_mora_payment?: boolean;
   gross_amount_cop: number;
   owner_dividend_cop: number;
 }
@@ -175,6 +177,7 @@ export interface SettlementLineSnapshot {
   agreed_rent_cop?: number;
   remaining_balance_cop?: number;
   is_partial_payment?: boolean;
+  mora_period_months?: string[];
   abonos_count?: number;
   abonos_breakdown?: SettlementAbonoSnapshot[];
   property_gross_collected_cop: number;

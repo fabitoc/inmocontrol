@@ -788,4 +788,83 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       inmoRepository.executeMonthlySettlement(1, getCurrentPeriodMonth())
     ).toThrow(/ya fue aprobada y registrada en el historial/i);
   });
+
+  it('filters only owed balances in Historial Reciente de Recaudos Anteriores to choose which debt to pay, and places overdue mora balances in the current settlement period and PDF rather than the past mora month', () => {
+    const currentMonth = getCurrentPeriodMonth();
+    render(<App />);
+
+    // Open [ PAGAR ] modal on Property 5 (Bodega Logística Sabana, which owes 2026-10 in MORA and currentMonth)
+    fireEvent.click(screen.getByTestId('dashboard-pay-button-5'));
+    expect(screen.getByTestId('payment-modal-dialog')).toBeInTheDocument();
+
+    // Verify Historial Reciente de Recaudos Anteriores ONLY shows the owed balances for Property 5 (2026-10 and currentMonth)
+    expect(screen.getByTestId(`owed-balance-card-${currentMonth}`)).toBeInTheDocument();
+    expect(screen.getByTestId('owed-balance-card-2026-10')).toBeInTheDocument();
+
+    // Click [ ESCOGER ESTE SALDO A PAGAR ] on the overdue 2026-10 balance
+    fireEvent.click(screen.getByTestId('select-owed-balance-2026-10'));
+    expect(screen.getByTestId('select-payment-period')).toHaveValue('2026-10');
+    expect(screen.getByTestId('input-payment-amount-cop')).toHaveValue(4_200_000);
+
+    // Pay a partial abono of $2.000.000 toward the 2026-10 mora balance
+    fireEvent.change(screen.getByTestId('input-payment-amount-cop'), {
+      target: { value: '2000000' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: /REGISTRAR ABONO EN LIBRO MAYOR/i })
+    );
+
+    // Verify 2026-10 still shows the remaining $2.200.000 owed in Historial Reciente de Recaudos Anteriores
+    expect(screen.getByTestId('owed-balance-card-2026-10')).toHaveTextContent(
+      '$2.200.000'
+    );
+
+    // Pay the remaining $2.200.000 of 2026-10 -> 2026-10 is now $0 owed and disappears from Historial Reciente de Recaudos Anteriores!
+    fireEvent.click(
+      screen.getByRole('button', { name: /REGISTRAR ABONO EN LIBRO MAYOR/i })
+    );
+    expect(
+      screen.queryByTestId('owed-balance-card-2026-10')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId(`owed-balance-card-${currentMonth}`)
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('close-payment-modal-button'));
+
+    // Verify that the 2026-10 mora payment does NOT appear in the 2026-10 settlement period, but DOES appear in the current settlement period and its PDF!
+    const bundle = inmoRepository.getOwnerDashboardBundle(1);
+    const previewOct = calculateOwnerSettlementPreview(
+      1,
+      bundle.properties,
+      bundle.payments,
+      bundle.maintenances,
+      '2026-10',
+      bundle.contracts,
+      bundle.settlements
+    );
+    // October settlement stays at $4.300.000 (Prop 2 + Prop 4) and has 0 activeMoraBalances
+    expect(previewOct.grossIncomeCop).toBe(4_300_000);
+    expect(previewOct.activeMoraBalances).toHaveLength(0);
+
+    const previewCurr = calculateOwnerSettlementPreview(
+      1,
+      bundle.properties,
+      bundle.payments,
+      bundle.maintenances,
+      currentMonth,
+      bundle.contracts,
+      bundle.settlements
+    );
+    expect(previewCurr.grossIncomeCop).toBe(4_200_000);
+    expect(previewCurr.lines[0].moraPeriodMonths).toEqual(['2026-10']);
+
+    const currPdf = generateSettlementPdfContent(
+      buildInvoiceFromPreview(bundle, previewCurr)
+    );
+    expect(currPdf).toContain('RECAUDO SALDO EN MORA 2026-10');
+    expect(currPdf).toContain(
+      `SALDOS EN MORA ACTIVOS REPORTADOS EN PERIODO DE LIQUIDACION ACTUAL \\(${currentMonth}\\)`
+    );
+  });
 });

@@ -27,6 +27,7 @@ export interface SettlementPreviewLine {
   agreedRentCop: number;
   remainingBalanceCop: number;
   isPartialPayment: boolean;
+  moraPeriodMonths?: string[];
   abonosCount: number;
   paymentsBreakdown: RentPayment[];
   propertyGrossCollectedCop: number;
@@ -36,9 +37,20 @@ export interface SettlementPreviewLine {
   totalAgencyFeeCop: number;
 }
 
+export interface ActiveMoraBalanceSnapshot {
+  property: Property;
+  tenantName: string;
+  periodMonth: string;
+  agreedRentCop: number;
+  alreadyCollectedCop: number;
+  remainingBalanceCop: number;
+  ownerSharePct: number;
+}
+
 export interface OwnerSettlementPreview {
   periodMonth: string;
   lines: SettlementPreviewLine[];
+  activeMoraBalances?: ActiveMoraBalanceSnapshot[];
   pendingMaintenances: MaintenanceExpense[];
   grossIncomeCop: number;
   commissionAmountCop: number;
@@ -185,10 +197,22 @@ export function calculateOwnerSettlementPreview(
         contracts.find(
           (c) => c.property_id === prop.id && c.status !== 'FINALIZADO'
         ) ?? contracts.find((c) => c.property_id === prop.id);
-      const agreedRentCop =
+      const baseAgreedCop =
         activeContract && activeContract.monthly_rent_cop > 0
           ? activeContract.monthly_rent_cop
           : prop.base_rent_cop;
+
+      const distinctOriginPeriods = Array.from(
+        new Set(propPayments.map((rp) => rp.period_month))
+      );
+      const moraPeriodMonths = distinctOriginPeriods.filter(
+        (pm) => pm < periodMonth
+      );
+
+      const agreedRentCop =
+        distinctOriginPeriods.length > 1
+          ? baseAgreedCop * distinctOriginPeriods.length
+          : baseAgreedCop;
       const remainingBalanceCop = Math.max(0, agreedRentCop - paidForProp);
       const isPartialPayment = agreedRentCop > 0 && paidForProp < agreedRentCop;
 
@@ -207,6 +231,7 @@ export function calculateOwnerSettlementPreview(
         agreedRentCop,
         remainingBalanceCop,
         isPartialPayment,
+        moraPeriodMonths,
         abonosCount: propPayments.length,
         paymentsBreakdown: propPayments,
         propertyGrossCollectedCop: paidForProp,
@@ -215,6 +240,38 @@ export function calculateOwnerSettlementPreview(
         fixedFeeCop: 0,
         totalAgencyFeeCop: breakdown.percentageFeeCop,
       });
+    }
+  }
+
+  const currentSystemPeriod = getCurrentPeriodMonth();
+  const activeMoraBalances: ActiveMoraBalanceSnapshot[] = [];
+  if (periodMonth >= currentSystemPeriod) {
+    for (const prop of properties) {
+      if (prop.property_type === 'EDIFICIO MATRIZ') continue;
+      const sharePct = getOwnerSharePct(prop, ownerId);
+      if (sharePct <= 0) continue;
+
+      const state = getPropertyTenantPaymentState(
+        prop.id,
+        properties,
+        contracts,
+        payments
+      );
+      if (!state.hasActiveContract || state.isAlDia) continue;
+
+      for (const bal of state.periodBalances) {
+        if (bal.remainingBalanceCop > 0) {
+          activeMoraBalances.push({
+            property: prop,
+            tenantName: state.contract?.tenant_name ?? 'Inquilino Activo',
+            periodMonth: bal.periodMonth,
+            agreedRentCop: bal.agreedRentCop,
+            alreadyCollectedCop: bal.alreadyCollectedCop,
+            remainingBalanceCop: bal.remainingBalanceCop,
+            ownerSharePct: sharePct,
+          });
+        }
+      }
     }
   }
 
@@ -251,6 +308,7 @@ export function calculateOwnerSettlementPreview(
   return {
     periodMonth,
     lines,
+    activeMoraBalances,
     pendingMaintenances,
     grossIncomeCop,
     commissionAmountCop,
@@ -1949,9 +2007,25 @@ class InmoRepositoryImpl {
 
     const prop = this.state.properties.find((p) => p.id === input.property_id);
     const primaryOwnerId = prop?.owner_id ?? 1;
+    const hasMoraRecordForPeriod = this.state.payments.some(
+      (rp) =>
+        rp.property_id === input.property_id &&
+        rp.period_month === input.period_month &&
+        rp.status === 'MORA'
+    );
+    const paidInCurrentCycle =
+      !input.payment_date || input.payment_date.slice(0, 7) >= currentPeriod;
+    const isOverdueMoraPayment =
+      input.period_month < currentPeriod &&
+      (hasMoraRecordForPeriod ||
+        contract?.status === 'MORA' ||
+        paidInCurrentCycle);
+    const baseSettlementPeriod = isOverdueMoraPayment
+      ? currentPeriod
+      : input.period_month;
     const settlementPeriodMonth = resolveNextUnsettledCutoffPeriod(
       primaryOwnerId,
-      input.period_month,
+      baseSettlementPeriod,
       this.state.settlements
     );
 
@@ -2098,12 +2172,15 @@ class InmoRepositoryImpl {
         agreed_rent_cop: line.agreedRentCop,
         remaining_balance_cop: line.remainingBalanceCop,
         is_partial_payment: line.isPartialPayment,
+        mora_period_months: line.moraPeriodMonths,
         abonos_count: line.abonosCount,
         abonos_breakdown: line.paymentsBreakdown.map((rp) => ({
           id: rp.id,
           reference_code: rp.reference_code,
           payment_date: rp.payment_date,
           payment_method: rp.payment_method,
+          origin_period_month: rp.period_month,
+          is_mora_payment: rp.period_month < periodMonth,
           gross_amount_cop: rp.gross_amount_cop,
           owner_dividend_cop: Math.round(
             rp.gross_amount_cop * (line.ownerSharePct / 100)

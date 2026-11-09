@@ -6,6 +6,7 @@ import {
   SettlementMaintenanceSnapshot,
 } from '../types/domain';
 import {
+  ActiveMoraBalanceSnapshot,
   OwnerSettlementPreview,
   formatCop,
   formatCopInWords,
@@ -19,6 +20,7 @@ export interface SettlementInvoiceDocument {
   statusLabel: string;
   owner: Owner;
   lines: SettlementLineSnapshot[];
+  activeMoraBalances?: ActiveMoraBalanceSnapshot[];
   maintenances: SettlementMaintenanceSnapshot[];
   grossIncomeCop: number;
   commissionAmountCop: number;
@@ -47,12 +49,15 @@ export function buildInvoiceFromPreview(
     agreed_rent_cop: line.agreedRentCop,
     remaining_balance_cop: line.remainingBalanceCop,
     is_partial_payment: line.isPartialPayment,
+    mora_period_months: line.moraPeriodMonths,
     abonos_count: line.abonosCount,
     abonos_breakdown: line.paymentsBreakdown.map((rp) => ({
       id: rp.id,
       reference_code: rp.reference_code,
       payment_date: rp.payment_date,
       payment_method: rp.payment_method,
+      origin_period_month: rp.period_month,
+      is_mora_payment: rp.period_month < preview.periodMonth,
       gross_amount_cop: rp.gross_amount_cop,
       owner_dividend_cop: Math.round(
         rp.gross_amount_cop * (line.ownerSharePct / 100)
@@ -96,6 +101,7 @@ export function buildInvoiceFromPreview(
     statusLabel: 'PRELIQUIDACION // PENDIENTE DISPERSION',
     owner: bundle.selected_owner,
     lines,
+    activeMoraBalances: preview.activeMoraBalances ?? [],
     maintenances,
     grossIncomeCop: preview.grossIncomeCop,
     commissionAmountCop: preview.commissionAmountCop,
@@ -426,11 +432,16 @@ export function generateSettlementPdfContent(
         if (line.abonos_breakdown && line.abonos_breakdown.length > 0) {
           for (let idx = 0; idx < line.abonos_breakdown.length; idx++) {
             const ab = line.abonos_breakdown[idx];
+            const moraTag = ab.is_mora_payment
+              ? ` [RECAUDO SALDO EN MORA ${ab.origin_period_month}]`
+              : ab.origin_period_month
+                ? ` [${ab.origin_period_month}]`
+                : '';
             y -= 10;
             drawText(
               58,
               y,
-              `-> Abono #${idx + 1} (${ab.payment_date}) Ref: ${ab.reference_code} [${ab.payment_method}]: ${formatCop(ab.owner_dividend_cop)}`,
+              `-> Abono #${idx + 1} (${ab.payment_date})${moraTag} [${ab.payment_method}]: ${formatCop(ab.owner_dividend_cop)}`,
               'F3',
               7,
               [0.32, 0.35, 0.42]
@@ -441,6 +452,30 @@ export function generateSettlementPdfContent(
 
       drawLine(36, y - 4, 576, y - 4);
       y -= 15;
+    }
+  }
+
+  if (doc.activeMoraBalances && doc.activeMoraBalances.length > 0) {
+    y -= 4;
+    drawText(
+      42,
+      y,
+      `SALDOS EN MORA ACTIVOS REPORTADOS EN PERIODO DE LIQUIDACION ACTUAL (${doc.periodMonth}):`,
+      'F2',
+      7.5,
+      [0.75, 0.1, 0.35]
+    );
+    y -= 11;
+    for (const mb of doc.activeMoraBalances) {
+      drawText(
+        50,
+        y,
+        `* [${mb.property.code}] ${mb.property.title} - ${mb.tenantName} (Origen Mora: ${mb.periodMonth}) | Pactado: ${formatCop(mb.agreedRentCop)} | Abonado: ${formatCop(mb.alreadyCollectedCop)} | Saldo en Mora: ${formatCop(mb.remainingBalanceCop)}`,
+        'F3',
+        7,
+        [0.65, 0.12, 0.32]
+      );
+      y -= 10;
     }
   }
 

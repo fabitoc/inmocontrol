@@ -924,6 +924,16 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                                   COPROPIEDAD {line.ownerSharePct}%
                                 </span>
                               )}
+                              {line.moraPeriodMonths &&
+                                line.moraPeriodMonths.length > 0 && (
+                                  <span
+                                    data-testid={`settlement-line-mora-badge-${line.property.id}`}
+                                    className="inline-block px-1.5 py-0.5 text-[10px] font-bold border border-[#ff007f] bg-[#ff007f]/15 text-[#ff007f]"
+                                  >
+                                    [RECAUDO SALDO EN MORA:{' '}
+                                    {line.moraPeriodMonths.join(', ')}]
+                                  </span>
+                                )}
                               <span
                                 data-testid={`settlement-line-abono-badge-${line.property.id}`}
                                 className={`inline-block px-1.5 py-0.5 text-[10px] font-bold border ${
@@ -976,10 +986,11 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                                         <strong className="text-[#ffb800]">
                                           Abono #{idx + 1}
                                         </strong>{' '}
-                                        · REF:{' '}
-                                        <span className="text-white font-semibold">
-                                          {rp.reference_code}
-                                        </span>{' '}
+                                        {rp.period_month < periodMonth && (
+                                          <span className="px-1 py-0.5 mr-1 text-[10px] font-bold border border-[#ff007f] bg-[#ff007f]/15 text-[#ff007f]">
+                                            [SALDO EN MORA {rp.period_month}]
+                                          </span>
+                                        )}
                                         · {rp.payment_method} ({rp.payment_date})
                                       </span>
                                       <span className="text-[#00FF66] font-bold">
@@ -1021,6 +1032,45 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                   </tbody>
                 </table>
               </div>
+
+              {preview.activeMoraBalances &&
+                preview.activeMoraBalances.length > 0 && (
+                  <div
+                    data-testid="settlement-active-mora-balances"
+                    className="p-3.5 bg-[#1a1b20] border border-[#ff007f]/60 font-mono text-xs space-y-2"
+                  >
+                    <div className="flex items-center justify-between border-b border-[#292a2e] pb-1.5">
+                      <span className="text-[#ff007f] font-bold uppercase">
+                        Saldos en Mora Reportados en el Periodo de Liquidación
+                        Actual ({periodMonth})
+                      </span>
+                      <span className="text-[11px] text-[#9ca3af]">
+                        Incluidos en Factura PDF Actual
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {preview.activeMoraBalances.map((mb) => (
+                        <div
+                          key={`${mb.property.id}-${mb.periodMonth}`}
+                          className="flex flex-wrap items-center justify-between gap-2 text-[11px]"
+                        >
+                          <span className="text-white">
+                            <strong>[{mb.property.code}]</strong>{' '}
+                            {mb.property.title} — {mb.tenantName}{' '}
+                            <span className="text-[#ff007f]">
+                              (Origen Mora: {mb.periodMonth})
+                            </span>
+                          </span>
+                          <span className="text-[#ff007f] font-bold">
+                            Debe: {formatCop(mb.remainingBalanceCop)} (Pactado:{' '}
+                            {formatCop(mb.agreedRentCop)} · Abonado:{' '}
+                            {formatCop(mb.alreadyCollectedCop)})
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
             </div>
 
             {/* Final Statement & Transactional Execution Card */}

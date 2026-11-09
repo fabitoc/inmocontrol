@@ -886,163 +886,177 @@ export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
                 </button>
               </form>
 
-              {/* Right Column: Historial Reciente de Recaudos & Saldos que Debe */}
+              {/* Right Column: Historial Reciente de Recaudos Anteriores (Solo Saldos que Debe) */}
               <div className="lg:col-span-6 bg-[#121317] border border-[#292a2e] p-5 space-y-4 flex flex-col justify-between">
-                <div className="space-y-4">
-                  {/* Saldos que debe por periodo */}
-                  <div data-testid="modal-pending-balances">
-                    <div className="border-b border-[#292a2e] pb-2 mb-2.5 flex items-center justify-between">
-                      <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-[#ffb800]">
-                        Saldos que Debe por Periodo ({selectedModalProperty?.code})
-                      </h4>
-                      <span
-                        className={`text-xs font-mono font-bold ${
-                          selectedModalPaymentState.isAlDia
-                            ? 'text-[#00FF66]'
-                            : 'text-[#ff007f]'
-                        }`}
-                      >
-                        Total que Debe:{' '}
-                        {formatCop(
-                          selectedModalPaymentState.totalRemainingDebtCop
-                        )}
-                      </span>
-                    </div>
-
-                    <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                      {selectedModalPaymentState.periodBalances.map((bal) => (
-                        <div
-                          key={bal.periodMonth}
-                          className="p-2.5 bg-[#1a1b20] border border-[#292a2e] flex items-center justify-between font-mono text-xs"
-                        >
-                          <div>
-                            <div className="text-white font-bold">
-                              Periodo {bal.periodMonth}
-                            </div>
-                            <div className="text-[11px] text-[#9ca3af]">
-                              Canon: {formatCop(bal.agreedRentCop)} · Abonado:{' '}
-                              <span className="text-[#00eefc]">
-                                {formatCop(bal.alreadyCollectedCop)}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div
-                              className={`font-bold ${
-                                bal.remainingBalanceCop === 0
-                                  ? 'text-[#00FF66]'
-                                  : 'text-[#ff007f]'
-                              }`}
-                            >
-                              Debe: {formatCop(bal.remainingBalanceCop)}
-                            </div>
-                            <span
-                              className={`inline-block mt-0.5 px-1.5 py-0.5 text-[10px] border ${
-                                bal.remainingBalanceCop === 0
-                                  ? 'border-[#00FF66]/40 text-[#00FF66] bg-[#00FF66]/10'
-                                  : 'border-[#ff007f]/40 text-[#ff007f] bg-[#ff007f]/10'
-                              }`}
-                            >
-                              {bal.remainingBalanceCop === 0
-                                ? '[AL DÍA]'
-                                : '[SALDO PENDIENTE]'}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Historial Reciente de Recaudos */}
-                  <div data-testid="modal-recent-payments">
-                    <div className="border-b border-[#292a2e] pb-2 mb-2.5 flex items-center justify-between">
-                      <h4 className="text-xs font-mono font-bold uppercase tracking-wider text-white">
+                <div
+                  className="space-y-4"
+                  data-testid="modal-recent-payments"
+                >
+                  <div className="border-b border-[#292a2e] pb-3 flex items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm font-mono font-bold uppercase tracking-wider text-white">
                         Historial Reciente de Recaudos Anteriores
                       </h4>
-                      <span className="text-[11px] font-mono text-[#00eefc]">
-                        {bundle.payments.length} registros
-                      </span>
+                      <p className="text-[11px] font-mono text-[#9ca3af] mt-0.5">
+                        Filtrado exclusivamente por los saldos que debe. Escoja a
+                        cuál saldo abonar o pagar.
+                      </p>
                     </div>
-
-                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                      {bundle.payments.map((payment) => {
-                        const prop = bundle.properties.find(
-                          (p) => p.id === payment.property_id
-                        );
-                        const payStatus = getPeriodCollectionStatus(
-                          payment.property_id,
-                          payment.period_month,
-                          bundle.properties,
-                          bundle.contracts,
-                          bundle.payments,
-                          payment.contract_id
-                        );
-                        const isPartial =
-                          payStatus.agreedRentCop > 0 &&
-                          payment.gross_amount_cop < payStatus.agreedRentCop;
-                        return (
-                          <div
-                            key={payment.id}
-                            className={`p-2.5 bg-[#1a1b20] border flex items-center justify-between font-mono text-xs ${
-                              payment.property_id === paymentPropertyId
-                                ? 'border-[#00eefc]/60'
-                                : 'border-[#292a2e]'
-                            }`}
-                          >
-                            <div>
-                              <div className="text-white font-semibold">
-                                {prop?.title ??
-                                  `Inmueble #${payment.property_id}`}{' '}
-                                <span className="text-[#9ca3af]">
-                                  ({payment.period_month})
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-[#9ca3af]">
-                                {payment.payment_date} · Medio:{' '}
-                                <strong className="text-white">
-                                  {payment.payment_method}
-                                </strong>
-                              </div>
-                              <div className="text-[10px] text-[#00eefc] mt-0.5">
-                                Acumulado Periodo:{' '}
-                                {formatCop(payStatus.alreadyCollectedCop)} ·
-                                Saldo que debe:{' '}
-                                <strong
-                                  className={
-                                    payStatus.remainingBalanceCop === 0
-                                      ? 'text-[#00FF66]'
-                                      : 'text-[#ffb800]'
-                                  }
-                                >
-                                  {formatCop(payStatus.remainingBalanceCop)}
-                                </strong>
-                              </div>
-                            </div>
-                            <div className="text-right">
-                              <div className="text-white font-bold">
-                                {formatCop(payment.gross_amount_cop)}
-                              </div>
-                              <span
-                                className={`inline-block px-1.5 py-0.5 text-[10px] border ${
-                                  payment.status === 'PAGADO'
-                                    ? isPartial
-                                      ? 'text-[#ffb800] border-[#ffb800]/40 bg-[#ffb800]/10'
-                                      : 'text-[#00FF66] border-[#00FF66]/40 bg-[#00FF66]/10'
-                                    : 'text-[#ff007f] border-[#ff007f]/40 bg-[#ff007f]/10'
-                                }`}
-                              >
-                                [
-                                {payment.status === 'PAGADO' && isPartial
-                                  ? 'ABONO PARCIAL'
-                                  : payment.status}
-                                ]
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <span
+                      data-testid="modal-pending-balances"
+                      className={`text-xs font-mono font-bold px-2.5 py-1 border ${
+                        selectedModalPaymentState.isAlDia
+                          ? 'text-[#00FF66] border-[#00FF66]/40 bg-[#00FF66]/10'
+                          : 'text-[#ff007f] border-[#ff007f]/50 bg-[#ff007f]/15'
+                      }`}
+                    >
+                      Total que Debe:{' '}
+                      {formatCop(
+                        selectedModalPaymentState.totalRemainingDebtCop
+                      )}
+                    </span>
                   </div>
+
+                  {(() => {
+                    const owedBalances =
+                      selectedModalPaymentState.periodBalances.filter(
+                        (b) => b.remainingBalanceCop > 0
+                      );
+
+                    if (owedBalances.length === 0) {
+                      return (
+                        <div
+                          data-testid="modal-no-pending-debt"
+                          className="p-4 bg-[#1a1b20] border border-[#00FF66]/40 font-mono text-xs text-[#00FF66]"
+                        >
+                          Este inquilino no registra saldos pendientes ni en
+                          mora ($0 COP). Estado: [AL DÍA].
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+                        {owedBalances.map((bal) => {
+                          const isSelectedToPay =
+                            paymentPeriod === bal.periodMonth;
+                          const isMoraPeriod =
+                            bal.periodMonth < currentSystemPeriod;
+                          const periodPayments = bundle.payments.filter(
+                            (rp) =>
+                              rp.property_id === paymentPropertyId &&
+                              rp.period_month === bal.periodMonth &&
+                              rp.status === 'PAGADO'
+                          );
+
+                          return (
+                            <div
+                              key={bal.periodMonth}
+                              data-testid={`owed-balance-card-${bal.periodMonth}`}
+                              onClick={() => {
+                                setPaymentPeriod(bal.periodMonth);
+                                setPaymentAmount(bal.remainingBalanceCop);
+                                setPaymentError(null);
+                              }}
+                              className={`p-3.5 bg-[#1a1b20] border cursor-pointer transition-colors font-mono text-xs space-y-2.5 ${
+                                isSelectedToPay
+                                  ? 'border-2 border-[#00eefc] bg-[#00eefc]/5'
+                                  : 'border-[#292a2e] hover:border-[#ffb800]/60'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-white font-bold text-sm">
+                                      Periodo {bal.periodMonth}
+                                    </span>
+                                    <span
+                                      className={`px-1.5 py-0.5 text-[10px] font-bold border ${
+                                        isMoraPeriod
+                                          ? 'border-[#ff007f] text-[#ff007f] bg-[#ff007f]/15'
+                                          : 'border-[#ffb800] text-[#ffb800] bg-[#ffb800]/15'
+                                      }`}
+                                    >
+                                      {isMoraPeriod
+                                        ? '[SALDO EN MORA]'
+                                        : '[SALDO PENDIENTE]'}
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-[#9ca3af] mt-1">
+                                    Canon Pactado:{' '}
+                                    <strong className="text-white">
+                                      {formatCop(bal.agreedRentCop)}
+                                    </strong>{' '}
+                                    · Abonado:{' '}
+                                    <strong className="text-[#00eefc]">
+                                      {formatCop(bal.alreadyCollectedCop)}
+                                    </strong>
+                                  </div>
+                                </div>
+
+                                <div className="text-right">
+                                  <div className="text-[10px] uppercase text-[#9ca3af]">
+                                    Saldo que debe:
+                                  </div>
+                                  <div className="text-sm font-bold text-[#ff007f]">
+                                    {formatCop(bal.remainingBalanceCop)}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {periodPayments.length > 0 && (
+                                <div className="pl-2.5 border-l-2 border-[#00eefc]/40 space-y-1 text-[11px] text-[#9ca3af]">
+                                  {periodPayments.map((rp, idx) => (
+                                    <div
+                                      key={rp.id}
+                                      className="flex items-center justify-between"
+                                    >
+                                      <span>
+                                        Abono #{idx + 1} ({rp.payment_date}) ·{' '}
+                                        <strong className="text-white">
+                                          {rp.payment_method}
+                                        </strong>
+                                      </span>
+                                      <span className="text-[#00eefc] font-bold">
+                                        {formatCop(rp.gross_amount_cop)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div className="pt-1 flex items-center justify-between border-t border-[#292a2e]">
+                                <span className="text-[10px] text-[#9ca3af]">
+                                  {isMoraPeriod
+                                    ? `Se liquida en el periodo actual (${currentSystemPeriod})`
+                                    : `Corte activo (${currentSystemPeriod})`}
+                                </span>
+                                <button
+                                  type="button"
+                                  data-testid={`select-owed-balance-${bal.periodMonth}`}
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    setPaymentPeriod(bal.periodMonth);
+                                    setPaymentAmount(bal.remainingBalanceCop);
+                                    setPaymentError(null);
+                                  }}
+                                  className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider border ${
+                                    isSelectedToPay
+                                      ? 'bg-[#00eefc] text-[#0d0e12] border-[#00eefc]'
+                                      : 'bg-[#121317] text-[#00eefc] border-[#00eefc]/50 hover:bg-[#00eefc]/15'
+                                  }`}
+                                >
+                                  {isSelectedToPay
+                                    ? '[ ✓ SALDO SELECCIONADO A PAGAR ]'
+                                    : '[ ESCOGER ESTE SALDO A PAGAR ]'}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
