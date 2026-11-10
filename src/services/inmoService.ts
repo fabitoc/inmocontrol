@@ -2074,54 +2074,115 @@ function createInitialSeedState(): LocalDatabaseState {
 
 const STORAGE_KEY = 'inmo_control_v2_state_v2';
 
+declare global {
+  interface Window {
+    __INMOCONTROL_DESKTOP_EXE__?: boolean;
+    __INMOCONTROL_INITIAL_DB__?: LocalDatabaseState | null;
+  }
+}
+
+function normalizeLoadedState(parsed: LocalDatabaseState): LocalDatabaseState {
+  parsed.properties = parsed.properties.map((p) => ({
+    ...p,
+    fixed_fee_cop: 0,
+  }));
+  if (Array.isArray(parsed.settlements)) {
+    parsed.settlements = parsed.settlements.map((s) => {
+      if (s.fixed_fee_amount_cop > 0) {
+        const updatedNet =
+          s.gross_income_cop -
+          s.commission_amount_cop -
+          s.maintenance_deduction_cop;
+        return {
+          ...s,
+          fixed_fee_amount_cop: 0,
+          net_payable_cop: updatedNet,
+          sha256_seal: computeSettlementSeal(
+            s.owner_id,
+            s.period_month,
+            s.gross_income_cop,
+            s.commission_amount_cop,
+            0,
+            s.maintenance_deduction_cop,
+            updatedNet
+          ),
+        };
+      }
+      return s;
+    });
+  }
+  if (!Array.isArray(parsed.handoverNotes)) {
+    parsed.handoverNotes = [];
+  }
+  if (!Array.isArray(parsed.backupSnapshots)) {
+    parsed.backupSnapshots = [
+      '%LocalAppData%\\InmoControl\\backups\\inmo_backup_20261015_080000_000.db',
+    ];
+  }
+  return parsed;
+}
+
+function syncStateToLocalExeDisk(state: LocalDatabaseState): void {
+  try {
+    if (
+      typeof window !== 'undefined' &&
+      window.__INMOCONTROL_DESKTOP_EXE__ &&
+      typeof window.fetch === 'function'
+    ) {
+      void window
+        .fetch('/api/local-db', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(state),
+        })
+        .catch(() => {
+          // Ignore network errors in test/offline environments
+        });
+    }
+  } catch {
+    // Ignore errors
+  }
+}
+
 function loadPersistedState(): LocalDatabaseState {
   try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as LocalDatabaseState;
-        if (parsed && Array.isArray(parsed.owners) && Array.isArray(parsed.properties)) {
-          // Ensure all properties have fixed_fee_cop = 0 (strictly percentage commission)
-          parsed.properties = parsed.properties.map((p) => ({
-            ...p,
-            fixed_fee_cop: 0,
-          }));
-          if (Array.isArray(parsed.settlements)) {
-            parsed.settlements = parsed.settlements.map((s) => {
-              if (s.fixed_fee_amount_cop > 0) {
-                const updatedNet =
-                  s.gross_income_cop -
-                  s.commission_amount_cop -
-                  s.maintenance_deduction_cop;
-                return {
-                  ...s,
-                  fixed_fee_amount_cop: 0,
-                  net_payable_cop: updatedNet,
-                  sha256_seal: computeSettlementSeal(
-                    s.owner_id,
-                    s.period_month,
-                    s.gross_income_cop,
-                    s.commission_amount_cop,
-                    0,
-                    s.maintenance_deduction_cop,
-                    updatedNet
-                  ),
-                };
-              }
-              return s;
-            });
+    if (typeof window !== 'undefined') {
+      if (
+        window.__INMOCONTROL_INITIAL_DB__ &&
+        Array.isArray(window.__INMOCONTROL_INITIAL_DB__.owners) &&
+        Array.isArray(window.__INMOCONTROL_INITIAL_DB__.properties)
+      ) {
+        const diskState = normalizeLoadedState(
+          window.__INMOCONTROL_INITIAL_DB__
+        );
+        if (window.localStorage) {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(diskState));
+        }
+        return diskState;
+      }
+
+      if (window.localStorage) {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as LocalDatabaseState;
+          if (
+            parsed &&
+            Array.isArray(parsed.owners) &&
+            Array.isArray(parsed.properties)
+          ) {
+            const normalized = normalizeLoadedState(parsed);
+            syncStateToLocalExeDisk(normalized);
+            return normalized;
           }
-          if (!Array.isArray(parsed.handoverNotes)) {
-            parsed.handoverNotes = [];
-          }
-          return parsed;
         }
       }
     }
   } catch {
     // Fallback to seed state if storage is unavailable
   }
-  return createInitialSeedState();
+  const initial = createInitialSeedState();
+  syncStateToLocalExeDisk(initial);
+  return initial;
 }
 
 class InmoRepositoryImpl {
@@ -2135,6 +2196,7 @@ class InmoRepositoryImpl {
     } catch {
       // Ignore storage quota errors
     }
+    syncStateToLocalExeDisk(this.state);
   }
 
   public resetToSeed(): void {
@@ -2146,6 +2208,7 @@ class InmoRepositoryImpl {
     } catch {
       // Ignore storage errors
     }
+    syncStateToLocalExeDisk(this.state);
   }
 
   public getAllProperties(): Property[] {
@@ -2992,6 +3055,7 @@ class InmoRepositoryImpl {
         this.state.backupSnapshots.length - 30
       );
     }
+    this.persistState();
     return backupPath;
   }
 

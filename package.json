@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:exe": "npm run build && powershell -ExecutionPolicy Bypass -File scripts/build-portable-exe.ps1",
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "tauri"
