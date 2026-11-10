@@ -49,12 +49,8 @@ namespace InmoControlDesktop
             EnsureDirectories();
             SynchronizeInitialDatabaseFiles();
 
-            // If an instance of InmoControl-2.0.exe is already running on PreferredPort, just open the window to it
-            if (IsExistingInstanceRunning(PreferredPort))
-            {
-                LaunchDesktopShell("http://127.0.0.1:" + PreferredPort + "/");
-                return;
-            }
+            // Terminate any previous running InmoControl launcher process so the latest executable always takes over
+            TerminatePreviousInstances();
 
             int port = BindListenerPort();
             _serverStartUtc = DateTime.UtcNow;
@@ -124,6 +120,34 @@ namespace InmoControlDesktop
                 watchdog.Start();
 
                 Application.Run();
+            }
+        }
+
+        private static void TerminatePreviousInstances()
+        {
+            try
+            {
+                int currentPid = Process.GetCurrentProcess().Id;
+                foreach (Process proc in Process.GetProcesses())
+                {
+                    try
+                    {
+                        if (proc.Id != currentPid &&
+                            proc.ProcessName.IndexOf("InmoControl", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            proc.Kill();
+                            proc.WaitForExit(1500);
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore inaccessible processes
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore enumeration errors
             }
         }
 
@@ -224,6 +248,7 @@ namespace InmoControlDesktop
 
         private static string ReadLocalDatabaseJson()
         {
+            const string emptyDbJson = "{\"owners\":[],\"properties\":[],\"contracts\":[],\"payments\":[],\"maintenances\":[],\"settlements\":[],\"handoverNotes\":[],\"backupSnapshots\":[]}";
             lock (DbLock)
             {
                 try
@@ -231,6 +256,12 @@ namespace InmoControlDesktop
                     if (File.Exists(_portableDbPath))
                     {
                         string content = File.ReadAllText(_portableDbPath, Encoding.UTF8).Trim();
+                        if (content.Contains("MAT-FACA-001") && content.Contains("CC 79.452.810"))
+                        {
+                            WriteFileAtomically(_portableDbPath, emptyDbJson);
+                            WriteFileAtomically(_localAppDbPath, emptyDbJson);
+                            return emptyDbJson;
+                        }
                         if (content.StartsWith("{") && content.EndsWith("}"))
                         {
                             return content;
@@ -239,6 +270,12 @@ namespace InmoControlDesktop
                     if (File.Exists(_localAppDbPath))
                     {
                         string content = File.ReadAllText(_localAppDbPath, Encoding.UTF8).Trim();
+                        if (content.Contains("MAT-FACA-001") && content.Contains("CC 79.452.810"))
+                        {
+                            WriteFileAtomically(_portableDbPath, emptyDbJson);
+                            WriteFileAtomically(_localAppDbPath, emptyDbJson);
+                            return emptyDbJson;
+                        }
                         if (content.StartsWith("{") && content.EndsWith("}"))
                         {
                             return content;
@@ -249,7 +286,7 @@ namespace InmoControlDesktop
                 {
                     // Ignore read errors
                 }
-                return "null";
+                return emptyDbJson;
             }
         }
 

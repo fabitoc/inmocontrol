@@ -1227,6 +1227,9 @@ export function buildSmartAlerts(
   bundle: OwnerDashboardBundle,
   now: Date = new Date()
 ): SmartAlert[] {
+  if (bundle.all_owners.length === 0 || bundle.selected_owner.id === 0) {
+    return [];
+  }
   const alerts: SmartAlert[] = [];
   const currentPeriod = getCurrentPeriodMonth(now);
   const nextPeriod = getNextPeriodMonth(currentPeriod);
@@ -2119,7 +2122,29 @@ function createInitialSeedState(): LocalDatabaseState {
   };
 }
 
-const STORAGE_KEY = 'inmo_control_v2_state_v2';
+const STORAGE_KEY = 'inmo_control_v2_clean_prod_v3';
+
+function createEmptyDatabaseState(): LocalDatabaseState {
+  return {
+    owners: [],
+    properties: [],
+    contracts: [],
+    payments: [],
+    maintenances: [],
+    settlements: [],
+    handoverNotes: [],
+    backupSnapshots: [],
+  };
+}
+
+function isLegacyDemoSeedState(parsed: LocalDatabaseState): boolean {
+  return Boolean(
+    Array.isArray(parsed.owners) &&
+      Array.isArray(parsed.properties) &&
+      parsed.owners.some((o) => o.document_id === 'CC 79.452.810') &&
+      parsed.properties.some((p) => p.code === 'MAT-FACA-001')
+  );
+}
 
 declare global {
   interface Window {
@@ -2129,6 +2154,9 @@ declare global {
 }
 
 function normalizeLoadedState(parsed: LocalDatabaseState): LocalDatabaseState {
+  if (isLegacyDemoSeedState(parsed)) {
+    return createEmptyDatabaseState();
+  }
   parsed.properties = parsed.properties.map((p) => ({
     ...p,
     fixed_fee_cop: 0,
@@ -2162,9 +2190,7 @@ function normalizeLoadedState(parsed: LocalDatabaseState): LocalDatabaseState {
     parsed.handoverNotes = [];
   }
   if (!Array.isArray(parsed.backupSnapshots)) {
-    parsed.backupSnapshots = [
-      '%LocalAppData%\\InmoControl\\backups\\inmo_backup_20261015_080000_000.db',
-    ];
+    parsed.backupSnapshots = [];
   }
   return parsed;
 }
@@ -2205,6 +2231,7 @@ function loadPersistedState(): LocalDatabaseState {
         if (window.localStorage) {
           window.localStorage.setItem(STORAGE_KEY, JSON.stringify(diskState));
         }
+        syncStateToLocalExeDisk(diskState);
         return diskState;
       }
 
@@ -2225,9 +2252,9 @@ function loadPersistedState(): LocalDatabaseState {
       }
     }
   } catch {
-    // Fallback to seed state if storage is unavailable
+    // Fallback to clean state if storage is unavailable
   }
-  const initial = createInitialSeedState();
+  const initial = createEmptyDatabaseState();
   syncStateToLocalExeDisk(initial);
   return initial;
 }
@@ -2258,6 +2285,11 @@ class InmoRepositoryImpl {
     syncStateToLocalExeDisk(this.state);
   }
 
+  public clearAllData(): void {
+    this.state = createEmptyDatabaseState();
+    this.persistState();
+  }
+
   public getAllProperties(): Property[] {
     return [...this.state.properties];
   }
@@ -2265,8 +2297,20 @@ class InmoRepositoryImpl {
   public getOwnerDashboardBundle(ownerId: number): OwnerDashboardBundle {
     const start = performance.now();
     const allOwners = [...this.state.owners];
-    const selectedOwner =
-      allOwners.find((o) => o.id === ownerId) || allOwners[0];
+    const selectedOwner: Owner =
+      allOwners.find((o) => o.id === ownerId) ||
+      allOwners[0] || {
+        id: 0,
+        name: 'Sin propietarios registrados',
+        document_id: '—',
+        phone: '—',
+        email: '—',
+        bank_name: 'REGISTRO LOCAL',
+        bank_account_type: 'AHORROS',
+        bank_account_number: '—',
+        cutoff_day: 5,
+        created_at: new Date().toISOString(),
+      };
     const targetOwnerId = selectedOwner.id;
 
     const properties = this.state.properties
