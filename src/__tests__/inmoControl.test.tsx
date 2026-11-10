@@ -970,6 +970,17 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     fireEvent.change(screen.getByTestId('edit-subdivision-title-0'), {
       target: { value: 'Torre 1 - Apto 101 Remodelado' },
     });
+    // Also change commission on parent/subdivision from 8% to 12% and rent from $1.500.000 to $2.000.000
+    // to verify it ONLY affects currentMonth onwards and NEVER alters past month 2026-10
+    fireEvent.change(screen.getByTestId('edit-prop-commission-1'), {
+      target: { value: '12' },
+    });
+    fireEvent.change(screen.getByTestId('edit-subdivision-rent-0'), {
+      target: { value: '2000000' },
+    });
+    expect(
+      screen.getByTestId('edit-property-effective-period-banner')
+    ).toHaveTextContent(new RegExp(currentMonth));
     fireEvent.click(screen.getByTestId('save-edit-property-btn-1'));
 
     expect(
@@ -981,6 +992,24 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     expect(
       screen.getByTestId('summary-subdivisions-list-1')
     ).toHaveTextContent('Torre 1 - Apto 101 Remodelado');
+
+    // Verify past month 2026-10 is completely untouched by the property edit (still $1.500.000 rent and 8% commission = $120.000 on Prop 2, total commission $400.000)
+    const bundleAfterEdit = inmoRepository.getOwnerDashboardBundle(1);
+    const previewOctAfterEdit = calculateOwnerSettlementPreview(
+      1,
+      bundleAfterEdit.properties,
+      bundleAfterEdit.payments,
+      bundleAfterEdit.maintenances,
+      '2026-10',
+      bundleAfterEdit.contracts,
+      bundleAfterEdit.settlements
+    );
+    expect(previewOctAfterEdit.grossIncomeCop).toBe(4_300_000);
+    expect(previewOctAfterEdit.commissionAmountCop).toBe(400_000);
+    expect(previewOctAfterEdit.lines[0].property.title).toBe(
+      'Torre 1 - Apto 101'
+    );
+    expect(previewOctAfterEdit.lines[0].agreedRentCop).toBe(1_500_000);
 
     // 3. Navigate to Module 4 (Administración) and execute property handover on Property 5 (Bodega Industrial Zona Franca, which is in MORA for 2026-10 and currentMonth, Canon $4.200.000)
     fireEvent.click(screen.getByTestId('nav-administracion-alertas'));

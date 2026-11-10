@@ -36,6 +36,20 @@ export interface PropertyCoOwner {
   share_pct: number;
 }
 
+export interface PropertyHistoricalSnapshot {
+  /** Exclusive upper-bound period (`YYYY-MM`): applies to all periods `< effective_until_period`. */
+  effective_until_period: string;
+  owner_id: number;
+  co_owners?: PropertyCoOwner[];
+  code: string;
+  title: string;
+  address: string;
+  property_type: string;
+  base_rent_cop: number;
+  commission_pct: number;
+  cutoff_day: number;
+}
+
 export interface Property {
   id: number;
   owner_id: number;
@@ -51,6 +65,10 @@ export interface Property {
   cutoff_day: number;
   status: PropertyStatus;
   created_at: string;
+  /** Period (`YYYY-MM`) from which the latest property edit takes effect (never retroactively affects `< updated_effective_period`). */
+  updated_effective_period?: string;
+  /** Immutable pre-edit snapshots used when resolving periods prior to `updated_effective_period`. */
+  historical_snapshots?: PropertyHistoricalSnapshot[];
 }
 
 export interface NewPropertyInput {

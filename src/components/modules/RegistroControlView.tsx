@@ -351,7 +351,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
     setEditPropFeedback(
       `Propiedad principal "${editPropTitle.trim() || prop.title}"${
         isMulti ? ` y ${editSubdivisions.length} subdivisiones` : ''
-      } actualizada en SQLite.`
+      } actualizada en SQLite (Vigente desde ${currentSystemPeriod} en adelante · Periodos anteriores intactos).`
     );
     setEditingPropertyId(null);
   };
@@ -2598,6 +2598,17 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   >
                     [ CERRAR ✕ ]
                   </button>
+                </div>
+
+                <div
+                  data-testid="edit-property-effective-period-banner"
+                  className="p-2.5 bg-[#00eefc]/10 border border-[#00eefc]/50 text-[11px] text-[#00eefc]"
+                >
+                  <strong>VIGENCIA CONTABLE:</strong> Los cambios realizados al
+                  editar inmuebles o subdivisiones aplican únicamente desde el{' '}
+                  <strong>mes actual ({currentSystemPeriod}) en adelante</strong>{' '}
+                  y no alteran liquidaciones, comisiones ni cánones de meses
+                  anteriores.
                 </div>
 
                 {/* Modalidad de Activo Selector */}

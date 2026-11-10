@@ -102,6 +102,68 @@ export function getOwnerSharePct(property: Property, ownerId: number): number {
 }
 
 /**
+ * Resolves the effective `Property` attributes for a given `periodMonth` (`YYYY-MM`):
+ * - Property edits made in `currentPeriod` (`updated_effective_period`) ONLY apply from `currentPeriod` onwards (`periodMonth >= updated_effective_period`).
+ * - Any prior period (`periodMonth < snap.effective_until_period`) strictly uses the pre-edit `PropertyHistoricalSnapshot` so past periods are never retroactively altered.
+ */
+export function resolvePropertyForPeriod(
+  prop: Property,
+  periodMonth: string
+): Property {
+  if (prop.historical_snapshots && prop.historical_snapshots.length > 0) {
+    const matching = prop.historical_snapshots.find(
+      (snap) => periodMonth < snap.effective_until_period
+    );
+    if (matching) {
+      return {
+        ...prop,
+        owner_id: matching.owner_id,
+        co_owners: matching.co_owners
+          ? matching.co_owners.map((c) => ({ ...c }))
+          : undefined,
+        code: matching.code,
+        title: matching.title,
+        address: matching.address,
+        property_type: matching.property_type,
+        base_rent_cop: matching.base_rent_cop,
+        commission_pct: matching.commission_pct,
+        cutoff_day: matching.cutoff_day,
+      };
+    }
+  }
+  return prop;
+}
+
+function preservePreEditPropertySnapshot(
+  prop: Property,
+  effectivePeriod: string
+): void {
+  if (!prop.historical_snapshots) {
+    prop.historical_snapshots = [];
+  }
+  const hasSnapshotForPeriod = prop.historical_snapshots.some(
+    (s) => s.effective_until_period === effectivePeriod
+  );
+  if (!hasSnapshotForPeriod) {
+    prop.historical_snapshots.push({
+      effective_until_period: effectivePeriod,
+      owner_id: prop.owner_id,
+      co_owners: prop.co_owners
+        ? prop.co_owners.map((c) => ({ ...c }))
+        : undefined,
+      code: prop.code,
+      title: prop.title,
+      address: prop.address,
+      property_type: prop.property_type,
+      base_rent_cop: prop.base_rent_cop,
+      commission_pct: prop.commission_pct,
+      cutoff_day: prop.cutoff_day,
+    });
+  }
+  prop.updated_effective_period = effectivePeriod;
+}
+
+/**
  * Core Business Rule 1:
  * Strictly computes the mixed agency commission formula:
  * `(Gross Income * Commission %) + Base Fixed Fee`
@@ -174,12 +236,15 @@ export function calculateOwnerSettlementPreview(
   let commissionAmountCop = 0;
   const fixedFeeAmountCop = 0;
 
-  const propById = new Map(properties.map((p) => [p.id, p]));
+  const effectiveProperties = properties.map((p) =>
+    resolvePropertyForPeriod(p, periodMonth)
+  );
+  const propById = new Map(effectiveProperties.map((p) => [p.id, p]));
   const isPeriodAlreadySettled = settlements.some(
     (s) => s.owner_id === ownerId && s.period_month === periodMonth
   );
 
-  for (const prop of properties) {
+  for (const prop of effectiveProperties) {
     const sharePct = getOwnerSharePct(prop, ownerId);
     if (sharePct <= 0) continue;
 
@@ -202,10 +267,15 @@ export function calculateOwnerSettlementPreview(
         contracts.find(
           (c) => c.property_id === prop.id && c.status !== 'FINALIZADO'
         ) ?? contracts.find((c) => c.property_id === prop.id);
-      const baseAgreedCop =
-        activeContract && activeContract.monthly_rent_cop > 0
-          ? activeContract.monthly_rent_cop
-          : prop.base_rent_cop;
+      const periodStatus = getPeriodCollectionStatus(
+        prop.id,
+        periodMonth,
+        properties,
+        contracts,
+        payments,
+        activeContract?.id
+      );
+      const baseAgreedCop = periodStatus.agreedRentCop || prop.base_rent_cop;
 
       const distinctOriginPeriods = Array.from(
         new Set(propPayments.map((rp) => rp.period_month))
@@ -216,7 +286,19 @@ export function calculateOwnerSettlementPreview(
 
       const agreedRentCop =
         distinctOriginPeriods.length > 1
-          ? baseAgreedCop * distinctOriginPeriods.length
+          ? distinctOriginPeriods.reduce(
+              (sum, pm) =>
+                sum +
+                (getPeriodCollectionStatus(
+                  prop.id,
+                  pm,
+                  properties,
+                  contracts,
+                  payments,
+                  activeContract?.id
+                ).agreedRentCop || baseAgreedCop),
+              0
+            )
           : baseAgreedCop;
       const remainingBalanceCop = Math.max(0, agreedRentCop - paidForProp);
       const isPartialPayment = agreedRentCop > 0 && paidForProp < agreedRentCop;
@@ -251,7 +333,7 @@ export function calculateOwnerSettlementPreview(
   const currentSystemPeriod = getCurrentPeriodMonth();
   const activeMoraBalances: ActiveMoraBalanceSnapshot[] = [];
   if (periodMonth >= currentSystemPeriod) {
-    for (const prop of properties) {
+    for (const prop of effectiveProperties) {
       if (prop.property_type === 'EDIFICIO MATRIZ') continue;
       const sharePct = getOwnerSharePct(prop, ownerId);
       if (sharePct <= 0) continue;
@@ -267,7 +349,7 @@ export function calculateOwnerSettlementPreview(
       for (const bal of state.periodBalances) {
         if (bal.remainingBalanceCop > 0) {
           activeMoraBalances.push({
-            property: prop,
+            property: resolvePropertyForPeriod(prop, bal.periodMonth),
             tenantName: state.contract?.tenant_name ?? 'Inquilino Activo',
             periodMonth: bal.periodMonth,
             agreedRentCop: bal.agreedRentCop,
@@ -830,7 +912,10 @@ export function getPeriodCollectionStatus(
   payments: RentPayment[],
   contractId?: number
 ): PeriodCollectionStatus {
-  const prop = properties.find((p) => p.id === propertyId);
+  const rawProp = properties.find((p) => p.id === propertyId);
+  const prop = rawProp
+    ? resolvePropertyForPeriod(rawProp, periodMonth)
+    : undefined;
   const contract =
     (contractId
       ? contracts.find((c) => c.id === contractId)
@@ -840,10 +925,27 @@ export function getPeriodCollectionStatus(
     ) ??
     contracts.find((c) => c.property_id === propertyId);
 
-  const agreedRentCop =
-    contract && contract.monthly_rent_cop > 0
-      ? contract.monthly_rent_cop
-      : prop?.base_rent_cop ?? 0;
+  const isBeforePropertyEdit = Boolean(
+    rawProp?.historical_snapshots?.some(
+      (snap) => periodMonth < snap.effective_until_period
+    )
+  );
+  const isAtOrAfterPropertyEdit = Boolean(
+    rawProp?.updated_effective_period &&
+      periodMonth >= rawProp.updated_effective_period
+  );
+
+  let agreedRentCop = 0;
+  if (isBeforePropertyEdit && prop) {
+    agreedRentCop = prop.base_rent_cop;
+  } else if (isAtOrAfterPropertyEdit && prop && prop.base_rent_cop > 0) {
+    agreedRentCop = prop.base_rent_cop;
+  } else {
+    agreedRentCop =
+      contract && contract.monthly_rent_cop > 0
+        ? contract.monthly_rent_cop
+        : prop?.base_rent_cop ?? 0;
+  }
 
   const alreadyCollectedCop = payments
     .filter(
@@ -2198,6 +2300,9 @@ class InmoRepositoryImpl {
     if (!prop) {
       throw new Error(`No existe el inmueble con ID #${input.id}`);
     }
+    const currentEffectivePeriod = getCurrentPeriodMonth();
+    preservePreEditPropertySnapshot(prop, currentEffectivePeriod);
+
     const oldTitle = prop.title;
     const oldAddress = prop.address;
 
@@ -2222,6 +2327,13 @@ class InmoRepositoryImpl {
     }
     if (input.base_rent_cop !== undefined) {
       prop.base_rent_cop = Math.max(0, Number(input.base_rent_cop));
+      if (prop.base_rent_cop > 0) {
+        for (const c of this.state.contracts) {
+          if (c.property_id === prop.id && c.status !== 'FINALIZADO') {
+            c.monthly_rent_cop = prop.base_rent_cop;
+          }
+        }
+      }
     }
     if (input.commission_pct !== undefined) {
       prop.commission_pct = Math.max(0, Number(input.commission_pct));
@@ -2252,6 +2364,10 @@ class InmoRepositoryImpl {
               : undefined;
 
           if (existingChild) {
+            preservePreEditPropertySnapshot(
+              existingChild,
+              currentEffectivePeriod
+            );
             existingChild.owner_id = prop.owner_id;
             existingChild.co_owners = prop.co_owners;
             existingChild.code = cleanCode;
@@ -2262,6 +2378,16 @@ class InmoRepositoryImpl {
               0,
               Number(sub.base_rent_cop || 0)
             );
+            if (existingChild.base_rent_cop > 0) {
+              for (const c of this.state.contracts) {
+                if (
+                  c.property_id === existingChild.id &&
+                  c.status !== 'FINALIZADO'
+                ) {
+                  c.monthly_rent_cop = existingChild.base_rent_cop;
+                }
+              }
+            }
             existingChild.commission_pct = Math.max(
               0,
               Number(sub.commission_pct || prop.commission_pct)
@@ -2291,6 +2417,7 @@ class InmoRepositoryImpl {
               cutoff_day: prop.cutoff_day,
               status: sub.status || 'DISPONIBLE',
               created_at: new Date().toISOString(),
+              updated_effective_period: currentEffectivePeriod,
             };
             this.state.properties.push(createdChild);
             keptChildIds.add(createdChild.id);
@@ -2309,6 +2436,7 @@ class InmoRepositoryImpl {
       // Propagate updated owner, co_owners, address, and prefix title to child sub-units
       for (const child of this.state.properties) {
         if (child.parent_property_id === prop.id) {
+          preservePreEditPropertySnapshot(child, currentEffectivePeriod);
           child.owner_id = prop.owner_id;
           if ('co_owners' in input) {
             child.co_owners = prop.co_owners;
