@@ -125,6 +125,8 @@ export interface TenantContract {
   cutoff_day: number;
   status: ContractStatus;
   created_at: string;
+  /** Set when a tenant contract is created with a `start_date` in a prior month (`< currentPeriod`). */
+  retroactive_from_period?: string;
 }
 
 export interface NewContractInput {

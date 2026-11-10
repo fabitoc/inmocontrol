@@ -13,6 +13,7 @@ import {
 } from '../../types/domain';
 import {
   calculatePropertyCommission,
+  enumeratePeriodsBetween,
   formatCop,
   formatCopInWords,
   formatPeriodMonthLabel,
@@ -796,14 +797,30 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
     setPropAddress('');
   };
 
+  const rawContractStartPeriod =
+    startDate?.slice(0, 7) || currentSystemPeriod;
+  const effectiveContractStartPeriod =
+    rawContractStartPeriod <= currentSystemPeriod
+      ? rawContractStartPeriod
+      : currentSystemPeriod;
+  const retroactivePeriods = enumeratePeriodsBetween(
+    effectiveContractStartPeriod,
+    currentSystemPeriod
+  );
+  const isRetroactiveContract = retroactivePeriods.length > 1;
+  const totalContractAgreedAcrossPeriodsCop =
+    retroactivePeriods.length * Number(contractRentCop || 0);
+
   const effectiveContractInitialPaymentCop =
     contractPaymentMode === 'COMPLETO'
-      ? Number(contractRentCop || 0)
+      ? totalContractAgreedAcrossPeriodsCop
       : Number(contractInitialPaymentCop || 0);
 
   const contractRemainingBalanceCop = Math.max(
     0,
-    Number(contractRentCop || 0) - effectiveContractInitialPaymentCop
+    (isRetroactiveContract && contractPaymentMode === 'COMPLETO'
+      ? totalContractAgreedAcrossPeriodsCop
+      : Number(contractRentCop || 0)) - effectiveContractInitialPaymentCop
   );
 
   const handleContractSubmit = (e: React.FormEvent) => {
@@ -818,6 +835,9 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
 
     const agreedCop = Number(contractRentCop || 0);
     const initialPaidCop = effectiveContractInitialPaymentCop;
+    const maxAllowedInitialCop = isRetroactiveContract
+      ? totalContractAgreedAcrossPeriodsCop
+      : agreedCop;
 
     if (initialPaidCop <= 0) {
       setContractError(
@@ -827,30 +847,33 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       return;
     }
 
-    if (agreedCop > 0 && initialPaidCop > agreedCop) {
+    if (agreedCop > 0 && initialPaidCop > maxAllowedInitialCop) {
       setContractError(
-        `Operación bloqueada: El abono inicial de ${formatCop(initialPaidCop)} supera el canon mensual pactado del inmueble (${formatCop(agreedCop)}).`
+        `Operación bloqueada: El abono inicial de ${formatCop(initialPaidCop)} supera el canon pactado del inmueble (${formatCop(maxAllowedInitialCop)}).`
       );
       setContractFeedback(null);
       return;
     }
 
-    const existingPeriodStatus = getPeriodCollectionStatus(
-      Number(selectedPropertyId),
-      contractPaymentPeriod,
-      bundle.properties,
-      bundle.contracts,
-      bundle.payments
-    );
-    if (
-      agreedCop > 0 &&
-      existingPeriodStatus.alreadyCollectedCop + initialPaidCop > agreedCop
-    ) {
-      setContractError(
-        `Operación bloqueada: El pago inicial de ${formatCop(initialPaidCop)} supera el saldo disponible del periodo ${contractPaymentPeriod} (${formatCop(existingPeriodStatus.remainingBalanceCop)}).`
+    if (!isRetroactiveContract || contractPaymentMode === 'ABONO') {
+      const existingPeriodStatus = getPeriodCollectionStatus(
+        Number(selectedPropertyId),
+        contractPaymentPeriod,
+        bundle.properties,
+        bundle.contracts,
+        bundle.payments
       );
-      setContractFeedback(null);
-      return;
+      if (
+        !isRetroactiveContract &&
+        agreedCop > 0 &&
+        existingPeriodStatus.alreadyCollectedCop + initialPaidCop > agreedCop
+      ) {
+        setContractError(
+          `Operación bloqueada: El pago inicial de ${formatCop(initialPaidCop)} supera el saldo disponible del periodo ${contractPaymentPeriod} (${formatCop(existingPeriodStatus.remainingBalanceCop)}).`
+        );
+        setContractFeedback(null);
+        return;
+      }
     }
 
     const createdContract = onCreateContract({
@@ -870,30 +893,77 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       createdContract && typeof createdContract === 'object'
         ? createdContract.id
         : 0;
+    const paddedCutoffDay = String(Number(contractCutoffDay || 5)).padStart(
+      2,
+      '0'
+    );
 
-    onRecordPayment({
-      contract_id: contractId,
-      property_id: Number(selectedPropertyId),
-      period_month: contractPaymentPeriod,
-      gross_amount_cop: initialPaidCop,
-      payment_date: startDate || new Date().toISOString().slice(0, 10),
-      payment_method: contractPaymentMethod,
-      reference_code:
-        contractPaymentRef.trim() ||
-        (contractPaymentMode === 'COMPLETO'
-          ? 'PAGO-COMPLETO-INGRESO'
-          : 'ABONO-INGRESO'),
-      status: 'PAGADO',
-    });
+    if (isRetroactiveContract && contractPaymentMode === 'COMPLETO') {
+      for (const period of retroactivePeriods) {
+        onRecordPayment({
+          contract_id: contractId,
+          property_id: Number(selectedPropertyId),
+          period_month: period,
+          gross_amount_cop: agreedCop,
+          payment_date: `${period}-${paddedCutoffDay}`,
+          payment_method: contractPaymentMethod,
+          reference_code:
+            contractPaymentRef.trim() || `PAGO-RETRO-${period}`,
+          status: 'PAGADO',
+        });
+      }
+    } else if (
+      isRetroactiveContract &&
+      contractPaymentMode === 'ABONO' &&
+      initialPaidCop > agreedCop
+    ) {
+      let remainingToDistribute = initialPaidCop;
+      for (const period of retroactivePeriods) {
+        if (remainingToDistribute <= 0) break;
+        const chunk = Math.min(agreedCop, remainingToDistribute);
+        onRecordPayment({
+          contract_id: contractId,
+          property_id: Number(selectedPropertyId),
+          period_month: period,
+          gross_amount_cop: chunk,
+          payment_date: `${period}-${paddedCutoffDay}`,
+          payment_method: contractPaymentMethod,
+          reference_code: contractPaymentRef.trim() || `ABONO-RETRO-${period}`,
+          status: 'PAGADO',
+        });
+        remainingToDistribute -= chunk;
+      }
+    } else {
+      const targetPeriodDate =
+        contractPaymentPeriod < currentSystemPeriod
+          ? `${contractPaymentPeriod}-${paddedCutoffDay}`
+          : startDate || new Date().toISOString().slice(0, 10);
+      onRecordPayment({
+        contract_id: contractId,
+        property_id: Number(selectedPropertyId),
+        period_month: contractPaymentPeriod,
+        gross_amount_cop: initialPaidCop,
+        payment_date: targetPeriodDate,
+        payment_method: contractPaymentMethod,
+        reference_code:
+          contractPaymentRef.trim() ||
+          (contractPaymentMode === 'COMPLETO'
+            ? 'PAGO-COMPLETO-INGRESO'
+            : 'ABONO-INGRESO'),
+        status: 'PAGADO',
+      });
+    }
 
     setPaymentPropertyId(Number(selectedPropertyId));
     setPaymentPeriod(contractPaymentPeriod);
     setContractError(null);
 
     const modeBadge =
-      initialPaidCop >= agreedCop
-        ? `Pago Completo 100% (${formatCop(initialPaidCop)})`
-        : `Abono Inicial (${formatCop(initialPaidCop)} · Saldo pendiente en ${contractPaymentPeriod}: ${formatCop(agreedCop - initialPaidCop)})`;
+      isRetroactiveContract && contractPaymentMode === 'COMPLETO'
+        ? `Cobro Retroactivo de ${retroactivePeriods.length} meses (${retroactivePeriods.join(', ')}) por ${formatCop(initialPaidCop)}`
+        : initialPaidCop >= agreedCop
+          ? `Pago Completo 100% (${formatCop(initialPaidCop)})`
+          : `Abono Inicial (${formatCop(initialPaidCop)} · Saldo pendiente en ${contractPaymentPeriod}: ${formatCop(agreedCop - initialPaidCop)})`;
 
     setContractFeedback(
       `Contrato activo creado para "${tenantName.trim()}" · ${modeBadge} registrado en ${contractPaymentPeriod} · Inmueble pasa a [OCUPADO].`
@@ -2285,6 +2355,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                 </span>
                 <input
                   type="date"
+                  data-testid="input-contract-start-date"
                   value={startDate}
                   max={`${currentSystemPeriod}-31`}
                   onChange={(e) => {
@@ -2329,8 +2400,65 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                 </span>
                 <span className="text-[11px] text-[#00eefc]">
                   CANON PACTADO: {formatCop(contractRentCop)}
+                  {isRetroactiveContract &&
+                    ` · TOTAL ${retroactivePeriods.length} MESES: ${formatCop(totalContractAgreedAcrossPeriodsCop)}`}
                 </span>
               </div>
+
+              {isRetroactiveContract && (
+                <div
+                  data-testid="retroactive-months-breakdown"
+                  className="p-3 bg-[#1a1b20] border border-[#00eefc]/50 space-y-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="text-[#00eefc] font-bold uppercase">
+                      Cálculo Automático de Meses desde Registro hasta la Fecha (
+                      {retroactivePeriods.length} meses:{' '}
+                      {retroactivePeriods[0]} → {currentSystemPeriod})
+                    </span>
+                    <span className="text-[#00FF66] font-bold">
+                      Total Acumulado:{' '}
+                      {formatCop(totalContractAgreedAcrossPeriodsCop)}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {retroactivePeriods.map((period) => {
+                      const isPeriodSettled = bundle.settlements.some(
+                        (s) => s.period_month === period
+                      );
+                      const paddedDay = String(
+                        Number(contractCutoffDay || 5)
+                      ).padStart(2, '0');
+                      return (
+                        <div
+                          key={period}
+                          data-testid={`retroactive-period-row-${period}`}
+                          className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 bg-[#121317] border border-[#292a2e] text-[11px]"
+                        >
+                          <div>
+                            <strong className="text-white">{period}</strong> ·
+                            Fecha cobro: {period}-{paddedDay} · Canon:{' '}
+                            <strong className="text-[#00eefc]">
+                              {formatCop(contractRentCop)}
+                            </strong>
+                          </div>
+                          <span
+                            className={`px-1.5 py-0.5 border text-[10px] font-bold ${
+                              isPeriodSettled
+                                ? 'border-[#ffb800] text-[#ffb800] bg-[#ffb800]/10'
+                                : 'border-[#00FF66] text-[#00FF66] bg-[#00FF66]/10'
+                            }`}
+                          >
+                            {isPeriodSettled
+                              ? `[MES YA LIQUIDADO → VA A LIQUIDACIÓN ACTUAL (${currentSystemPeriod})]`
+                              : `[MES NO LIQUIDADO → VA A LIQUIDACIÓN DE ${period}]`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <button
@@ -2338,7 +2466,9 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   data-testid="contract-payment-mode-full"
                   onClick={() => {
                     setContractPaymentMode('COMPLETO');
-                    setContractInitialPaymentCop(Number(contractRentCop || 0));
+                    setContractInitialPaymentCop(
+                      totalContractAgreedAcrossPeriodsCop
+                    );
                     setContractError(null);
                   }}
                   className={`px-3 py-2 border text-left transition-colors ${
@@ -2348,7 +2478,11 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   }`}
                 >
                   ( {contractPaymentMode === 'COMPLETO' ? '•' : ' '} ) PAGO
-                  COMPLETO DEL ALQUILER (100%)
+                  COMPLETO DEL ALQUILER (100%
+                  {isRetroactiveContract
+                    ? ` · ${retroactivePeriods.length} MESES`
+                    : ''}
+                  )
                 </button>
                 <button
                   type="button"
@@ -2387,12 +2521,11 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                     onChange={(e) => setContractPaymentPeriod(e.target.value)}
                     className="w-full bg-[#1a1b20] border border-[#00eefc]/60 px-3 py-2 text-white font-bold"
                   >
-                    <option value={contractPaymentPeriod}>
-                      {formatPeriodMonthLabel(
-                        contractPaymentPeriod,
-                        currentSystemPeriod
-                      )}
-                    </option>
+                    {retroactivePeriods.map((period) => (
+                      <option key={period} value={period}>
+                        {formatPeriodMonthLabel(period, currentSystemPeriod)}
+                      </option>
+                    ))}
                   </select>
                 </label>
 

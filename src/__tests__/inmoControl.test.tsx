@@ -1107,4 +1107,83 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       'Abono en entrega de inmueble Bodega por canon atrasado'
     );
   });
+
+  it('calculates and charges all elapsed months up to system date when creating a tenant retroactively, routing unsettled months to their own billing period and already-liquidated months to the current settlement period', () => {
+    const currentMonth = getCurrentPeriodMonth();
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId('nav-registro-control'));
+    fireEvent.click(screen.getByTestId('tab-inquilino'));
+
+    // Select Property 3 (Torre 1 - Apto 102, Canon $1.450.000)
+    fireEvent.change(screen.getByTestId('select-contract-property'), {
+      target: { value: '3' },
+    });
+
+    // Set start date to 2026-09-05 (2026-09 is already liquidated for Owner 1; 2026-10 is unsettled; currentMonth is unsettled)
+    fireEvent.change(screen.getByTestId('input-contract-start-date'), {
+      target: { value: '2026-09-05' },
+    });
+
+    // Verify retroactive breakdown shows 2026-09 (already liquidated -> currentMonth) and 2026-10 (not liquidated -> 2026-10)
+    expect(
+      screen.getByTestId('retroactive-months-breakdown')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId('retroactive-period-row-2026-09')
+    ).toHaveTextContent(
+      new RegExp(`MES YA LIQUIDADO.*VA A LIQUIDACIÓN ACTUAL \\(${currentMonth}\\)`)
+    );
+    expect(
+      screen.getByTestId('retroactive-period-row-2026-10')
+    ).toHaveTextContent(/MES NO LIQUIDADO.*VA A LIQUIDACIÓN DE 2026-10/);
+
+    // Fill tenant info and submit in PAGO COMPLETO mode to charge all elapsed months
+    fireEvent.change(screen.getByTestId('input-tenant-name'), {
+      target: { value: 'Andrés Felipe Pardo' },
+    });
+    fireEvent.change(screen.getByTestId('input-tenant-document'), {
+      target: { value: 'CC 80.112.490' },
+    });
+    fireEvent.click(screen.getByTestId('submit-contract-button'));
+
+    expect(screen.getByTestId('contract-success-feedback')).toHaveTextContent(
+      /Cobro Retroactivo/i
+    );
+
+    const bundle = inmoRepository.getOwnerDashboardBundle(1);
+
+    // 2026-10 was NOT liquidated yet, so the 2026-10 payment ($1.450.000) goes directly into the 2026-10 settlement on its cutoff date 2026-10-05
+    const previewOct = calculateOwnerSettlementPreview(
+      1,
+      bundle.properties,
+      bundle.payments,
+      bundle.maintenances,
+      '2026-10',
+      bundle.contracts,
+      bundle.settlements
+    );
+    // Base Oct ($4.300.000) + Prop 3 ($1.450.000) = $5.750.000
+    expect(previewOct.grossIncomeCop).toBe(5_750_000);
+    const prop3OctLine = previewOct.lines.find((l) => l.property.id === 3);
+    expect(prop3OctLine).toBeDefined();
+    expect(prop3OctLine?.grossCollectedCop).toBe(1_450_000);
+    expect(prop3OctLine?.paymentsBreakdown[0].payment_date).toBe('2026-10-05');
+
+    // 2026-09 WAS already liquidated, so the 2026-09 payment ($1.450.000) goes into currentMonth along with currentMonth ($1.450.000) = $2.900.000
+    const previewCurrent = calculateOwnerSettlementPreview(
+      1,
+      bundle.properties,
+      bundle.payments,
+      bundle.maintenances,
+      currentMonth,
+      bundle.contracts,
+      bundle.settlements
+    );
+    const prop3CurrentLine = previewCurrent.lines.find(
+      (l) => l.property.id === 3
+    );
+    expect(prop3CurrentLine).toBeDefined();
+    expect(prop3CurrentLine?.grossCollectedCop).toBe(2_900_000);
+  });
 });

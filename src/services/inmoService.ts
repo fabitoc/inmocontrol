@@ -666,6 +666,27 @@ export function getNextPeriodMonth(periodMonth: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+/**
+ * Enumerates all `YYYY-MM` monthly periods in chronological order from `startPeriod` up to `endPeriod` (inclusive).
+ */
+export function enumeratePeriodsBetween(
+  startPeriod: string,
+  endPeriod: string
+): string[] {
+  if (!startPeriod || !endPeriod || startPeriod > endPeriod) {
+    return endPeriod ? [endPeriod] : [];
+  }
+  const result: string[] = [];
+  let cursor = startPeriod;
+  let guard = 0;
+  while (cursor <= endPeriod && guard < 60) {
+    result.push(cursor);
+    cursor = getNextPeriodMonth(cursor);
+    guard++;
+  }
+  return result;
+}
+
 export function resolveNextUnsettledCutoffPeriod(
   ownerId: number,
   basePeriodMonth: string,
@@ -847,6 +868,32 @@ export function getContractBillingCycleState(
   const cutoffDay = contract?.cutoff_day ?? prop?.cutoff_day ?? 5;
 
   const validPeriods = new Set<string>([currentPeriod]);
+
+  // If the tenant contract was created retroactively from past months ("por descuidos del usuario"),
+  // calculate all elapsed months from registrationPeriod up to currentPeriod and include any unpaid month.
+  const isRetroactiveContract = Boolean(
+    contract &&
+      (contract.retroactive_from_period || contract.id > 6) &&
+      registrationPeriod < currentPeriod
+  );
+  if (isRetroactiveContract) {
+    for (const p of enumeratePeriodsBetween(
+      registrationPeriod,
+      currentPeriod
+    )) {
+      const st = getPeriodCollectionStatus(
+        propertyId,
+        p,
+        properties,
+        contracts,
+        payments,
+        contract?.id
+      );
+      if (p === currentPeriod || st.remainingBalanceCop > 0) {
+        validPeriods.add(p);
+      }
+    }
+  }
 
   for (const rp of payments) {
     if (rp.property_id !== propertyId) continue;
@@ -2525,9 +2572,14 @@ class InmoRepositoryImpl {
   public createTenantContract(input: NewContractInput): TenantContract {
     const nextId =
       this.state.contracts.reduce((max, c) => Math.max(max, c.id), 0) + 1;
+    const currentPeriod = getCurrentPeriodMonth();
+    const startPeriod = input.start_date?.slice(0, 7) || currentPeriod;
     const contract: TenantContract = {
       id: nextId,
       ...input,
+      ...(startPeriod < currentPeriod
+        ? { retroactive_from_period: startPeriod }
+        : {}),
       created_at: new Date().toISOString(),
     };
     // Transactional update: insert contract + mark property OCUPADO
@@ -2591,27 +2643,54 @@ class InmoRepositoryImpl {
 
     const prop = this.state.properties.find((p) => p.id === input.property_id);
     const primaryOwnerId = prop?.owner_id ?? 1;
+    const cutoffDay = contract?.cutoff_day ?? prop?.cutoff_day ?? 5;
     const hasMoraRecordForPeriod = this.state.payments.some(
       (rp) =>
         rp.property_id === input.property_id &&
         rp.period_month === input.period_month &&
         rp.status === 'MORA'
     );
-    const paidInCurrentCycle =
-      !input.payment_date || input.payment_date.slice(0, 7) >= currentPeriod;
-    const isOverdueMoraPayment =
+    const isExplicitMoraContract =
       input.period_month < currentPeriod &&
-      (hasMoraRecordForPeriod ||
-        contract?.status === 'MORA' ||
-        paidInCurrentCycle);
-    const baseSettlementPeriod = isOverdueMoraPayment
-      ? currentPeriod
-      : input.period_month;
-    const settlementPeriodMonth = resolveNextUnsettledCutoffPeriod(
-      primaryOwnerId,
-      baseSettlementPeriod,
-      this.state.settlements
+      (hasMoraRecordForPeriod || contract?.status === 'MORA');
+    const isOriginPeriodSettled = this.state.settlements.some(
+      (s) =>
+        s.owner_id === primaryOwnerId && s.period_month === input.period_month
     );
+
+    let settlementPeriodMonth: string;
+    let effectivePaymentDate =
+      input.payment_date || new Date().toISOString().slice(0, 10);
+
+    if (isExplicitMoraContract) {
+      settlementPeriodMonth = resolveNextUnsettledCutoffPeriod(
+        primaryOwnerId,
+        currentPeriod,
+        this.state.settlements
+      );
+    } else if (input.period_month < currentPeriod) {
+      if (!isOriginPeriodSettled) {
+        settlementPeriodMonth = input.period_month;
+        if (
+          !input.payment_date ||
+          input.payment_date.slice(0, 7) !== input.period_month
+        ) {
+          effectivePaymentDate = `${input.period_month}-${String(cutoffDay).padStart(2, '0')}`;
+        }
+      } else {
+        settlementPeriodMonth = resolveNextUnsettledCutoffPeriod(
+          primaryOwnerId,
+          currentPeriod,
+          this.state.settlements
+        );
+      }
+    } else {
+      settlementPeriodMonth = resolveNextUnsettledCutoffPeriod(
+        primaryOwnerId,
+        input.period_month,
+        this.state.settlements
+      );
+    }
 
     const nextId =
       this.state.payments.reduce((max, rp) => Math.max(max, rp.id), 0) + 1;
@@ -2619,6 +2698,7 @@ class InmoRepositoryImpl {
     const payment: RentPayment = {
       id: nextId,
       ...input,
+      payment_date: effectivePaymentDate,
       payment_method: normalizedMethod,
       reference_code:
         input.reference_code?.trim() ||
