@@ -12,6 +12,7 @@ namespace InmoControlDesktop
 {
     internal static class Program
     {
+        private const int PreferredPort = 14280;
         private static string _exeDir;
         private static string _portableDataDir;
         private static string _portableDbPath;
@@ -21,6 +22,9 @@ namespace InmoControlDesktop
         private static string _localAppBackupDir;
         private static readonly object DbLock = new object();
         private static volatile bool _running = true;
+        private static volatile bool _clientEverConnected = false;
+        private static DateTime _serverStartUtc = DateTime.UtcNow;
+        private static DateTime _lastActivityUtc = DateTime.UtcNow;
         private static TcpListener _listener;
 
         [STAThread]
@@ -45,9 +49,16 @@ namespace InmoControlDesktop
             EnsureDirectories();
             SynchronizeInitialDatabaseFiles();
 
-            int port = GetAvailablePort();
-            _listener = new TcpListener(IPAddress.Loopback, port);
-            _listener.Start();
+            // If an instance of InmoControl-2.0.exe is already running on PreferredPort, just open the window to it
+            if (IsExistingInstanceRunning(PreferredPort))
+            {
+                LaunchDesktopShell("http://127.0.0.1:" + PreferredPort + "/");
+                return;
+            }
+
+            int port = BindListenerPort();
+            _serverStartUtc = DateTime.UtcNow;
+            _lastActivityUtc = DateTime.UtcNow;
 
             Thread serverThread = new Thread(RunHttpLoop)
             {
@@ -57,62 +68,111 @@ namespace InmoControlDesktop
             serverThread.Start();
 
             string appUrl = "http://127.0.0.1:" + port + "/";
-            Process browserProcess = LaunchDesktopShell(appUrl);
 
-            if (browserProcess != null)
+            // Wait briefly until listener is ready before launching the shell window
+            WaitForServerReady(port);
+            LaunchDesktopShell(appUrl);
+
+            using (NotifyIcon tray = new NotifyIcon())
             {
-                Thread monitorThread = new Thread(() =>
+                tray.Icon = System.Drawing.SystemIcons.Application;
+                tray.Text = "InmoControl 2.0 (127.0.0.1:" + port + ")";
+                tray.Visible = true;
+                tray.DoubleClick += (s, e) => LaunchDesktopShell(appUrl);
+
+                ContextMenu menu = new ContextMenu();
+                menu.MenuItems.Add("Abrir Ventana de InmoControl 2.0", (s, e) => LaunchDesktopShell(appUrl));
+                menu.MenuItems.Add("Abrir Carpeta de Base de Datos Local", (s, e) =>
                 {
-                    try
-                    {
-                        browserProcess.WaitForExit();
-                    }
-                    catch
-                    {
-                        // Ignore process wait exceptions
-                    }
+                    try { Process.Start("explorer.exe", _portableDataDir); } catch { }
+                });
+                menu.MenuItems.Add("-");
+                menu.MenuItems.Add("Guardar Respaldo y Cerrar", (s, e) =>
+                {
                     PerformShutdownBackup();
+                    tray.Visible = false;
                     _running = false;
-                    try
-                    {
-                        _listener.Stop();
-                    }
-                    catch
-                    {
-                        // Ignore listener stop errors
-                    }
+                    try { _listener.Stop(); } catch { }
                     Application.Exit();
+                });
+                tray.ContextMenu = menu;
+
+                // Watchdog thread: once the user closes the window and heartbeats stop for 20s, back up and exit cleanly
+                Thread watchdog = new Thread(() =>
+                {
+                    while (_running)
+                    {
+                        Thread.Sleep(3000);
+                        double secondsSinceStart = (DateTime.UtcNow - _serverStartUtc).TotalSeconds;
+                        double secondsSinceActivity = (DateTime.UtcNow - _lastActivityUtc).TotalSeconds;
+
+                        if (_clientEverConnected && secondsSinceStart > 25 && secondsSinceActivity > 20)
+                        {
+                            PerformShutdownBackup();
+                            tray.Visible = false;
+                            _running = false;
+                            try { _listener.Stop(); } catch { }
+                            Application.Exit();
+                            break;
+                        }
+                    }
                 })
                 {
-                    IsBackground = true
+                    IsBackground = true,
+                    Name = "InmoControlWatchdog"
                 };
-                monitorThread.Start();
+                watchdog.Start();
+
                 Application.Run();
             }
-            else
+        }
+
+        private static bool IsExistingInstanceRunning(int port)
+        {
+            try
             {
-                // Fallback if browser shell returns immediately
-                using (NotifyIcon tray = new NotifyIcon())
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + "/api/health");
+                req.Timeout = 600;
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                 {
-                    tray.Icon = System.Drawing.SystemIcons.Application;
-                    tray.Text = "InmoControl 2.0 - Base de Datos Local Activa";
-                    tray.Visible = true;
-
-                    ContextMenu menu = new ContextMenu();
-                    menu.MenuItems.Add("Abrir InmoControl 2.0", (s, e) => Process.Start(appUrl));
-                    menu.MenuItems.Add("Abrir Carpeta de Base de Datos Local", (s, e) => Process.Start("explorer.exe", _portableDataDir));
-                    menu.MenuItems.Add("-");
-                    menu.MenuItems.Add("Cerrar y Respaldar", (s, e) =>
-                    {
-                        PerformShutdownBackup();
-                        tray.Visible = false;
-                        _running = false;
-                        Application.Exit();
-                    });
-                    tray.ContextMenu = menu;
-
-                    Application.Run();
+                    return resp.StatusCode == HttpStatusCode.OK;
                 }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static int BindListenerPort()
+        {
+            for (int candidate = PreferredPort; candidate < PreferredPort + 20; candidate++)
+            {
+                try
+                {
+                    TcpListener listener = new TcpListener(IPAddress.Loopback, candidate);
+                    listener.Start();
+                    _listener = listener;
+                    return candidate;
+                }
+                catch
+                {
+                    // Port busy, try next
+                }
+            }
+
+            TcpListener fallback = new TcpListener(IPAddress.Loopback, 0);
+            fallback.Start();
+            _listener = fallback;
+            return ((IPEndPoint)fallback.LocalEndpoint).Port;
+        }
+
+        private static void WaitForServerReady(int port)
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                if (IsExistingInstanceRunning(port)) return;
+                Thread.Sleep(50);
             }
         }
 
@@ -265,20 +325,8 @@ namespace InmoControlDesktop
             }
         }
 
-        private static int GetAvailablePort()
+        private static void LaunchDesktopShell(string url)
         {
-            TcpListener temp = new TcpListener(IPAddress.Loopback, 0);
-            temp.Start();
-            int port = ((IPEndPoint)temp.LocalEndpoint).Port;
-            temp.Stop();
-            return port;
-        }
-
-        private static Process LaunchDesktopShell(string url)
-        {
-            string profileDir = Path.Combine(_exeDir, "InmoControl_Data", "runtime_profile");
-            try { Directory.CreateDirectory(profileDir); } catch { }
-
             string[] candidateBrowsers = new string[]
             {
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
@@ -296,10 +344,11 @@ namespace InmoControlDesktop
                         ProcessStartInfo psi = new ProcessStartInfo
                         {
                             FileName = browserPath,
-                            Arguments = "--app=\"" + url + "\" --window-size=1440,900 --user-data-dir=\"" + profileDir + "\" --no-first-run --no-default-browser-check",
+                            Arguments = "--app=\"" + url + "\" --window-size=1440,900",
                             UseShellExecute = false
                         };
-                        return Process.Start(psi);
+                        Process.Start(psi);
+                        return;
                     }
                     catch
                     {
@@ -316,7 +365,6 @@ namespace InmoControlDesktop
             {
                 // Ignore browser launch error
             }
-            return null;
         }
 
         private static void RunHttpLoop()
@@ -367,8 +415,26 @@ namespace InmoControlDesktop
                         }
                     }
 
+                    if (method == "GET" && path == "/api/health")
+                    {
+                        byte[] healthBytes = Encoding.UTF8.GetBytes("{\"status\":\"ok\"}");
+                        WriteResponse(stream, "200 OK", "application/json; charset=utf-8", healthBytes);
+                        return;
+                    }
+
+                    _lastActivityUtc = DateTime.UtcNow;
+
+                    if (method == "POST" && path == "/api/heartbeat")
+                    {
+                        _clientEverConnected = true;
+                        byte[] hbBytes = Encoding.UTF8.GetBytes("{\"alive\":true}");
+                        WriteResponse(stream, "200 OK", "application/json; charset=utf-8", hbBytes);
+                        return;
+                    }
+
                     if (method == "POST" && path == "/api/local-db")
                     {
+                        _clientEverConnected = true;
                         string body = ReadExactBytesAsUtf8(stream, contentLength);
                         SaveLocalDatabaseJson(body);
                         byte[] okBytes = Encoding.UTF8.GetBytes("{\"ok\":true}");
@@ -378,8 +444,12 @@ namespace InmoControlDesktop
 
                     if (method == "GET" && path == "/api/init-db.js")
                     {
+                        _clientEverConnected = true;
                         string dbJson = ReadLocalDatabaseJson();
-                        string js = "window.__INMOCONTROL_DESKTOP_EXE__ = true;\nwindow.__INMOCONTROL_INITIAL_DB__ = " + dbJson + ";\n";
+                        string js =
+                            "window.__INMOCONTROL_DESKTOP_EXE__ = true;\n" +
+                            "window.__INMOCONTROL_INITIAL_DB__ = " + dbJson + ";\n" +
+                            "setInterval(function(){ fetch('/api/heartbeat', { method: 'POST', keepalive: true }).catch(function(){}); }, 3000);\n";
                         byte[] jsBytes = Encoding.UTF8.GetBytes(js);
                         WriteResponse(stream, "200 OK", "application/javascript; charset=utf-8", jsBytes);
                         return;
@@ -387,6 +457,7 @@ namespace InmoControlDesktop
 
                     if (method == "GET" && path == "/assets/app.css")
                     {
+                        _clientEverConnected = true;
                         byte[] cssBytes = ReadEmbeddedResource("app.css");
                         WriteResponse(stream, "200 OK", "text/css; charset=utf-8", cssBytes);
                         return;
@@ -394,12 +465,14 @@ namespace InmoControlDesktop
 
                     if (method == "GET" && path == "/assets/app.js")
                     {
+                        _clientEverConnected = true;
                         byte[] jsBytes = ReadEmbeddedResource("app.js");
                         WriteResponse(stream, "200 OK", "application/javascript; charset=utf-8", jsBytes);
                         return;
                     }
 
                     // Default SPA fallback: serve index.html
+                    _clientEverConnected = true;
                     byte[] htmlBytes = ReadEmbeddedResource("index.html");
                     WriteResponse(stream, "200 OK", "text/html; charset=utf-8", htmlBytes);
                 }
