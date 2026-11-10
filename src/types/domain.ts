@@ -68,15 +68,28 @@ export interface NewPropertyInput {
   status: PropertyStatus;
 }
 
+export interface UpdateSubdivisionInput {
+  id?: number;
+  code: string;
+  title: string;
+  property_type: string;
+  base_rent_cop: number;
+  commission_pct: number;
+  status: PropertyStatus;
+}
+
 export interface UpdatePropertyInput {
   id: number;
+  owner_id?: number;
   code?: string;
   title?: string;
   address?: string;
   property_type?: string;
   base_rent_cop?: number;
   commission_pct?: number;
+  status?: PropertyStatus;
   co_owners?: PropertyCoOwner[];
+  subdivisions?: UpdateSubdivisionInput[];
 }
 
 export type ContractStatus = 'ACTIVO' | 'FINALIZADO' | 'MORA';

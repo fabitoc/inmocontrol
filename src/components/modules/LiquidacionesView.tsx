@@ -89,12 +89,24 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
     bundle.handover_notes ?? []
   );
 
-  const weeklySeries = buildWeeklyTelemetrySeries(bundle);
+  const weeklySeries = buildWeeklyTelemetrySeries(bundle, periodMonth, preview);
+  const weeklyTotalGrossCop = weeklySeries.reduce(
+    (sum, w) => sum + w.grossIncomeCop,
+    0
+  );
+  const weeklyTotalMaintCop = weeklySeries.reduce(
+    (sum, w) => sum + w.maintenanceCostCop,
+    0
+  );
   const maxChartValue = Math.max(
     ...weeklySeries.map((w) =>
-      Math.max(w.grossIncomeCop, w.maintenanceCostCop)
+      Math.max(
+        w.grossIncomeCop,
+        w.maintenanceCostCop,
+        Math.abs(w.netLiquidityCop)
+      )
     ),
-    1_000_000
+    100_000
   );
 
   const activeReceiptPath =
@@ -656,14 +668,31 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
           {/* Telemetry & Data Viz SVG Chart + Visual Receipt Inspector */}
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
             {/* Weekly Gross Income vs Maintenance Costs SVG Chart */}
-            <div className="xl:col-span-7 bg-[#0d0e12] border border-[#292a2e] p-5 space-y-4">
-              <div className="border-b border-[#292a2e] pb-3 flex items-center justify-between">
+            <div
+              className="xl:col-span-7 bg-[#0d0e12] border border-[#292a2e] p-5 space-y-4"
+              data-testid="weekly-telemetry-panel"
+            >
+              <div className="border-b border-[#292a2e] pb-3 flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-mono font-bold uppercase tracking-wider text-white">
-                    Telemetría Semanal: Ingreso Bruto vs Costos de Mantenimiento
+                    Telemetría Semanal: Ingreso Bruto vs Costos de Mantenimiento (
+                    {periodMonth})
                   </h3>
                   <p className="text-xs font-mono text-[#9ca3af]">
-                    Comparativa semanal con línea de tendencia de liquidez neta
+                    Datos reales del periodo {periodMonth} por semana · Bruto:{' '}
+                    <span
+                      className="text-[#00eefc] font-bold"
+                      data-testid="weekly-telemetry-total-gross"
+                    >
+                      {formatCop(weeklyTotalGrossCop)}
+                    </span>{' '}
+                    · Mantenimiento (1:1):{' '}
+                    <span
+                      className="text-[#ffb800] font-bold"
+                      data-testid="weekly-telemetry-total-maint"
+                    >
+                      -{formatCop(weeklyTotalMaintCop)}
+                    </span>
                   </p>
                 </div>
                 <div className="flex items-center gap-3 text-[11px] font-mono">
@@ -697,14 +726,24 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                   {/* Bars per week */}
                   {weeklySeries.map((pt, idx) => {
                     const baseX = 65 + idx * 115;
-                    const grossHeight = Math.max(
-                      8,
-                      Math.round((pt.grossIncomeCop / maxChartValue) * 115)
-                    );
-                    const maintHeight = Math.max(
-                      4,
-                      Math.round((pt.maintenanceCostCop / maxChartValue) * 115)
-                    );
+                    const grossHeight =
+                      pt.grossIncomeCop > 0
+                        ? Math.max(
+                            8,
+                            Math.round(
+                              (pt.grossIncomeCop / maxChartValue) * 115
+                            )
+                          )
+                        : 2;
+                    const maintHeight =
+                      pt.maintenanceCostCop > 0
+                        ? Math.max(
+                            6,
+                            Math.round(
+                              (pt.maintenanceCostCop / maxChartValue) * 115
+                            )
+                          )
+                        : 2;
                     return (
                       <g key={pt.weekLabel}>
                         <rect
@@ -714,6 +753,18 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                           height={grossHeight}
                           fill="#00eefc"
                         />
+                        {pt.grossIncomeCop > 0 && (
+                          <text
+                            x={baseX + 13}
+                            y={Math.max(14, 150 - grossHeight)}
+                            textAnchor="middle"
+                            fill="#00eefc"
+                            fontSize="8.5"
+                            fontFamily="monospace"
+                          >
+                            {formatCop(pt.grossIncomeCop)}
+                          </text>
+                        )}
                         <rect
                           x={baseX + 30}
                           y={155 - maintHeight}
@@ -721,6 +772,18 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                           height={maintHeight}
                           fill="#ffb800"
                         />
+                        {pt.maintenanceCostCop > 0 && (
+                          <text
+                            x={baseX + 43}
+                            y={Math.max(24, 150 - maintHeight)}
+                            textAnchor="middle"
+                            fill="#ffb800"
+                            fontSize="8.5"
+                            fontFamily="monospace"
+                          >
+                            -{formatCop(pt.maintenanceCostCop)}
+                          </text>
+                        )}
                         <text
                           x={baseX + 28}
                           y="172"
@@ -743,14 +806,15 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                     points={weeklySeries
                       .map((pt, idx) => {
                         const x = 93 + idx * 115;
+                        const clampedNet = Math.max(0, pt.netLiquidityCop);
                         const y =
-                          155 -
-                          Math.max(
-                            10,
-                            Math.round(
-                              (pt.netLiquidityCop / maxChartValue) * 115
-                            )
-                          );
+                          clampedNet > 0
+                            ? 155 -
+                              Math.max(
+                                10,
+                                Math.round((clampedNet / maxChartValue) * 115)
+                              )
+                            : 153;
                         return `${x},${y}`;
                       })
                       .join(' ')}
@@ -758,12 +822,15 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
 
                   {weeklySeries.map((pt, idx) => {
                     const x = 93 + idx * 115;
+                    const clampedNet = Math.max(0, pt.netLiquidityCop);
                     const y =
-                      155 -
-                      Math.max(
-                        10,
-                        Math.round((pt.netLiquidityCop / maxChartValue) * 115)
-                      );
+                      clampedNet > 0
+                        ? 155 -
+                          Math.max(
+                            10,
+                            Math.round((clampedNet / maxChartValue) * 115)
+                          )
+                        : 153;
                     return (
                       <circle
                         key={`dot-${pt.weekLabel}`}
@@ -777,18 +844,42 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                 </svg>
               </div>
 
-              <div className="grid grid-cols-4 gap-2 font-mono text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 font-mono text-xs">
                 {weeklySeries.map((w) => (
                   <div
                     key={w.weekLabel}
-                    className="bg-[#1a1b20] border border-[#292a2e] p-2.5"
+                    data-testid={`telemetry-week-card-${w.weekLabel}`}
+                    className="bg-[#1a1b20] border border-[#292a2e] p-2.5 space-y-1"
                   >
-                    <div className="text-[#9ca3af]">{w.weekLabel}</div>
-                    <div className="text-white font-bold">
-                      {formatCop(w.netLiquidityCop)}
+                    <div className="text-[#9ca3af] font-bold border-b border-[#292a2e] pb-1">
+                      {w.weekLabel}
                     </div>
-                    <div className="text-[10px] text-[#00FF66]">
-                      Liquidez Neta
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-[#9ca3af]">Bruto:</span>
+                      <span
+                        className="text-[#00eefc] font-bold"
+                        data-testid={`telemetry-gross-${w.weekLabel}`}
+                      >
+                        {formatCop(w.grossIncomeCop)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-[#9ca3af]">Mant.:</span>
+                      <span
+                        className="text-[#ffb800] font-bold"
+                        data-testid={`telemetry-maint-${w.weekLabel}`}
+                      >
+                        -{formatCop(w.maintenanceCostCop)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[11px] pt-0.5 border-t border-[#292a2e]/60">
+                      <span className="text-[#00FF66]">Liquidez Neta:</span>
+                      <span
+                        className="text-white font-bold"
+                        data-testid={`telemetry-net-${w.weekLabel}`}
+                      >
+                        {formatCop(w.netLiquidityCop)}
+                      </span>
                     </div>
                   </div>
                 ))}

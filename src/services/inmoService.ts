@@ -1242,23 +1242,134 @@ export function buildSmartAlerts(
 }
 
 /**
- * Generates deterministic weekly telemetry points for Module 5 (`Liquidaciones`) SVG chart.
+ * Generates real weekly telemetry points (`SEM-01`..`SEM-04`) for Module 5 (`Liquidaciones`) SVG chart,
+ * bucketed by the actual payment dates (`payment_date`) and maintenance execution dates (`execution_date`)
+ * of the selected accounting period (`periodMonth`).
  */
 export function buildWeeklyTelemetrySeries(
-  bundle: OwnerDashboardBundle
+  bundle: OwnerDashboardBundle,
+  periodMonth?: string,
+  preview?: OwnerSettlementPreview
 ): WeeklyTelemetryPoint[] {
-  const grossTotal = Math.max(bundle.collected_monthly_cop, 1_500_000);
-  const maintTotal = bundle.maintenances
-    .filter((m) => m.execution_date.startsWith('2026-10'))
-    .reduce((s, m) => s + m.net_cost_cop, 0);
+  const ownerId = bundle.selected_owner.id;
+  const targetPeriod =
+    periodMonth ??
+    preview?.periodMonth ??
+    resolveActiveSettlementPeriodForOwner(
+      ownerId,
+      bundle.payments,
+      bundle.maintenances,
+      bundle.settlements,
+      new Date(),
+      bundle.handover_notes ?? []
+    );
 
-  const weights = [0.42, 0.33, 0.15, 0.1];
-  const maintWeights = [0.25, 0.45, 0.2, 0.1];
+  const activePreview =
+    preview ??
+    calculateOwnerSettlementPreview(
+      ownerId,
+      bundle.properties,
+      bundle.payments,
+      bundle.maintenances,
+      targetPeriod,
+      bundle.contracts,
+      bundle.settlements,
+      bundle.handover_notes ?? []
+    );
+
+  const getWeekIndex = (dateStr?: string): number => {
+    if (!dateStr) return 0;
+    const parts = dateStr.slice(0, 10).split('-');
+    const day = Number(parts[2] ?? 1);
+    if (!Number.isFinite(day) || day <= 7) return 0;
+    if (day <= 14) return 1;
+    if (day <= 21) return 2;
+    return 3;
+  };
+
+  const grossByWeek = [0, 0, 0, 0];
+  const maintByWeek = [0, 0, 0, 0];
+
+  if (activePreview.lines.length > 0) {
+    for (const line of activePreview.lines) {
+      if (line.paymentsBreakdown && line.paymentsBreakdown.length > 0) {
+        for (const rp of line.paymentsBreakdown) {
+          const ownerDividend = Math.round(
+            rp.gross_amount_cop * (line.ownerSharePct / 100)
+          );
+          const wIdx = getWeekIndex(rp.payment_date);
+          grossByWeek[wIdx] += ownerDividend;
+        }
+      } else if (line.grossCollectedCop > 0) {
+        grossByWeek[0] += line.grossCollectedCop;
+      }
+    }
+  } else {
+    const settled = bundle.settlements.find(
+      (s) => s.owner_id === ownerId && s.period_month === targetPeriod
+    );
+    if (settled?.lines_snapshot && settled.lines_snapshot.length > 0) {
+      for (const snap of settled.lines_snapshot) {
+        if (snap.abonos_breakdown && snap.abonos_breakdown.length > 0) {
+          for (const ab of snap.abonos_breakdown) {
+            const wIdx = getWeekIndex(ab.payment_date);
+            grossByWeek[wIdx] += ab.owner_dividend_cop;
+          }
+        } else if (snap.gross_collected_cop > 0) {
+          grossByWeek[0] += snap.gross_collected_cop;
+        }
+      }
+    }
+  }
+
+  const propById = new Map(bundle.properties.map((p) => [p.id, p]));
+  const seenMaintIds = new Set<number>();
+
+  for (const m of activePreview.pendingMaintenances) {
+    seenMaintIds.add(m.id);
+    const prop = propById.get(m.property_id);
+    const sharePct = prop ? getOwnerSharePct(prop, ownerId) : 100;
+    const prorated = Math.round(m.net_cost_cop * (sharePct / 100));
+    maintByWeek[getWeekIndex(m.execution_date)] += prorated;
+  }
+
+  const settledForPeriod = bundle.settlements.find(
+    (s) => s.owner_id === ownerId && s.period_month === targetPeriod
+  );
+  if (settledForPeriod) {
+    if (
+      settledForPeriod.maintenances_snapshot &&
+      settledForPeriod.maintenances_snapshot.length > 0
+    ) {
+      for (const ms of settledForPeriod.maintenances_snapshot) {
+        if (seenMaintIds.has(ms.id)) continue;
+        seenMaintIds.add(ms.id);
+        maintByWeek[getWeekIndex(ms.execution_date)] +=
+          ms.prorated_deduction_cop;
+      }
+    } else {
+      for (const m of bundle.maintenances) {
+        if (seenMaintIds.has(m.id)) continue;
+        const mPeriod =
+          m.settlement_period_month ?? m.execution_date.slice(0, 7);
+        if (
+          m.settlement_id === settledForPeriod.id ||
+          mPeriod === targetPeriod
+        ) {
+          seenMaintIds.add(m.id);
+          const prop = propById.get(m.property_id);
+          const sharePct = prop ? getOwnerSharePct(prop, ownerId) : 100;
+          const prorated = Math.round(m.net_cost_cop * (sharePct / 100));
+          maintByWeek[getWeekIndex(m.execution_date)] += prorated;
+        }
+      }
+    }
+  }
 
   return ['SEM-01', 'SEM-02', 'SEM-03', 'SEM-04'].map((weekLabel, idx) => {
-    const grossIncomeCop = Math.round(grossTotal * weights[idx]);
-    const maintenanceCostCop = Math.round(maintTotal * maintWeights[idx]);
-    const netLiquidityCop = Math.max(0, grossIncomeCop - maintenanceCostCop);
+    const grossIncomeCop = grossByWeek[idx];
+    const maintenanceCostCop = maintByWeek[idx];
+    const netLiquidityCop = grossIncomeCop - maintenanceCostCop;
     return {
       weekLabel,
       grossIncomeCop,
@@ -2090,6 +2201,13 @@ class InmoRepositoryImpl {
     const oldTitle = prop.title;
     const oldAddress = prop.address;
 
+    if (input.owner_id !== undefined && Number(input.owner_id) > 0) {
+      prop.owner_id = Number(input.owner_id);
+      const ownerObj = this.state.owners.find((o) => o.id === prop.owner_id);
+      if (ownerObj?.cutoff_day) {
+        prop.cutoff_day = ownerObj.cutoff_day;
+      }
+    }
     if (input.code !== undefined && input.code.trim()) {
       prop.code = input.code.trim().toUpperCase();
     }
@@ -2108,14 +2226,93 @@ class InmoRepositoryImpl {
     if (input.commission_pct !== undefined) {
       prop.commission_pct = Math.max(0, Number(input.commission_pct));
     }
-    if (input.co_owners !== undefined) {
+    if (input.status !== undefined) {
+      prop.status = input.status;
+    }
+    if ('co_owners' in input) {
       prop.co_owners = input.co_owners;
     }
 
-    // Propagate updated address (and prefix title if it was a parent matrix) to child sub-units
-    if (prop.parent_property_id === null) {
+    if (input.subdivisions !== undefined && prop.parent_property_id === null) {
+      if (input.subdivisions.length > 0) {
+        prop.property_type = 'EDIFICIO MATRIZ';
+        prop.base_rent_cop = 0;
+        const keptChildIds = new Set<number>();
+
+        input.subdivisions.forEach((sub, idx) => {
+          const cleanCode = (
+            sub.code.trim() || `SUB-10${idx + 1}`
+          ).toUpperCase();
+          const rawTitle = sub.title.trim() || `Unidad ${idx + 1}`;
+          const existingChild =
+            sub.id !== undefined
+              ? this.state.properties.find(
+                  (c) => c.id === sub.id && c.parent_property_id === prop.id
+                )
+              : undefined;
+
+          if (existingChild) {
+            existingChild.owner_id = prop.owner_id;
+            existingChild.co_owners = prop.co_owners;
+            existingChild.code = cleanCode;
+            existingChild.title = rawTitle;
+            existingChild.address = prop.address;
+            existingChild.property_type = sub.property_type || 'APARTAMENTO';
+            existingChild.base_rent_cop = Math.max(
+              0,
+              Number(sub.base_rent_cop || 0)
+            );
+            existingChild.commission_pct = Math.max(
+              0,
+              Number(sub.commission_pct || prop.commission_pct)
+            );
+            existingChild.cutoff_day = prop.cutoff_day;
+            existingChild.status = sub.status || existingChild.status;
+            keptChildIds.add(existingChild.id);
+          } else {
+            const nextId =
+              this.state.properties.reduce((max, p) => Math.max(max, p.id), 0) +
+              1;
+            const createdChild: Property = {
+              id: nextId,
+              owner_id: prop.owner_id,
+              co_owners: prop.co_owners,
+              parent_property_id: prop.id,
+              code: cleanCode,
+              title: rawTitle,
+              address: prop.address,
+              property_type: sub.property_type || 'APARTAMENTO',
+              base_rent_cop: Math.max(0, Number(sub.base_rent_cop || 0)),
+              commission_pct: Math.max(
+                0,
+                Number(sub.commission_pct || prop.commission_pct)
+              ),
+              fixed_fee_cop: 0,
+              cutoff_day: prop.cutoff_day,
+              status: sub.status || 'DISPONIBLE',
+              created_at: new Date().toISOString(),
+            };
+            this.state.properties.push(createdChild);
+            keptChildIds.add(createdChild.id);
+          }
+        });
+
+        this.state.properties = this.state.properties.filter(
+          (p) => p.parent_property_id !== prop.id || keptChildIds.has(p.id)
+        );
+      } else {
+        this.state.properties = this.state.properties.filter(
+          (p) => p.parent_property_id !== prop.id
+        );
+      }
+    } else if (prop.parent_property_id === null) {
+      // Propagate updated owner, co_owners, address, and prefix title to child sub-units
       for (const child of this.state.properties) {
         if (child.parent_property_id === prop.id) {
+          child.owner_id = prop.owner_id;
+          if ('co_owners' in input) {
+            child.co_owners = prop.co_owners;
+          }
           if (input.address !== undefined && child.address === oldAddress) {
             child.address = prop.address;
           }

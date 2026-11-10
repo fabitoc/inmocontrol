@@ -950,27 +950,37 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       screen.queryByText(/Número de Cuenta para Dispersión/i)
     ).not.toBeInTheDocument();
 
-    // 2. Switch to 02 // Registro de Inmueble and edit main property/matrix (id 1) in Resumen de Inmuebles del Propietario Activo
+    // 2. Switch to 02 // Registro de Inmueble and edit main property/matrix (id 1) via popup modal with full Registro de Inmueble y Subdivisiones form
     fireEvent.click(screen.getByTestId('tab-inmueble'));
     const editBtn = screen.getByTestId('edit-root-property-btn-1');
     expect(editBtn).toBeInTheDocument();
     fireEvent.click(editBtn);
 
+    expect(screen.getByTestId('edit-root-property-modal')).toBeInTheDocument();
     expect(screen.getByTestId('edit-root-property-panel-1')).toBeInTheDocument();
+    expect(screen.getByTestId('edit-subdivisions-builder')).toBeInTheDocument();
+    expect(screen.getByTestId('edit-subdivision-row-0')).toBeInTheDocument();
+
     fireEvent.change(screen.getByTestId('edit-prop-title-1'), {
       target: { value: 'Edificio Matriz Los Rosales Renovado' },
     });
     fireEvent.change(screen.getByTestId('edit-prop-address-1'), {
       target: { value: 'Cra 4 # 72-88' },
     });
+    fireEvent.change(screen.getByTestId('edit-subdivision-title-0'), {
+      target: { value: 'Torre 1 - Apto 101 Remodelado' },
+    });
     fireEvent.click(screen.getByTestId('save-edit-property-btn-1'));
 
     expect(
-      screen.queryByTestId('edit-root-property-panel-1')
+      screen.queryByTestId('edit-root-property-modal')
     ).not.toBeInTheDocument();
     expect(screen.getByTestId('summary-root-title-1')).toHaveTextContent(
       'Edificio Matriz Los Rosales Renovado'
     );
+    expect(
+      screen.getByTestId('summary-subdivisions-list-1')
+    ).toHaveTextContent('Torre 1 - Apto 101 Remodelado');
 
     // 3. Navigate to Module 4 (Administración) and execute property handover on Property 5 (Bodega Industrial Zona Franca, which is in MORA for 2026-10 and currentMonth, Canon $4.200.000)
     fireEvent.click(screen.getByTestId('nav-administracion-alertas'));
@@ -999,13 +1009,35 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       '[DISPONIBLE]'
     );
 
-    // 4. Navigate to Module 5 (Liquidaciones) on current settlement period and verify:
-    //    - The $500.000 abono was added to the active settlement gross income along with its payment description
-    //    - The handover settlement note appears with the owed months and remaining debt
+    // 4. Navigate to Module 5 (Liquidaciones) and verify Telemetría Semanal reflects real changing values per period
     fireEvent.click(screen.getByTestId('nav-liquidaciones'));
+    fireEvent.change(screen.getByTestId('select-settlement-period'), {
+      target: { value: '2026-10' },
+    });
+    // On 2026-10: Gross = $4.300.000 (SEM-01: $1.5M + $2.8M on Oct 4 & 5), Maint = -$625.000 (SEM-02: $285k + $340k on Oct 8 & 11)
+    expect(
+      screen.getByTestId('weekly-telemetry-total-gross')
+    ).toHaveTextContent('$4.300.000');
+    expect(
+      screen.getByTestId('weekly-telemetry-total-maint')
+    ).toHaveTextContent('-$625.000');
+    expect(screen.getByTestId('telemetry-gross-SEM-01')).toHaveTextContent(
+      '$4.300.000'
+    );
+    expect(screen.getByTestId('telemetry-maint-SEM-02')).toHaveTextContent(
+      '-$625.000'
+    );
+
+    // Switch to currentMonth and verify Telemetría Semanal updates dynamically to $500.000 gross
     fireEvent.change(screen.getByTestId('select-settlement-period'), {
       target: { value: currentMonth },
     });
+    expect(
+      screen.getByTestId('weekly-telemetry-total-gross')
+    ).toHaveTextContent('$500.000');
+    expect(
+      screen.getByTestId('weekly-telemetry-total-maint')
+    ).toHaveTextContent('-$625.000');
 
     // $500.000 handover abono (Prop 5) in currentMonth
     expect(screen.getByTestId('settlement-gross-income')).toHaveTextContent(

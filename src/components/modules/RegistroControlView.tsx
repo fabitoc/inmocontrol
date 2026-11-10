@@ -24,6 +24,7 @@ import {
 
 interface SubdivisionDraft {
   id: string;
+  dbId?: number;
   code: string;
   title: string;
   property_type: string;
@@ -111,45 +112,246 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
     Record<number, boolean>
   >({});
 
-  // Root Property (Matriz Principal / Inmueble Principal) Inline Edit State
+  // Root Property & Subdivisions Popup Modal Edit State
   const [editingPropertyId, setEditingPropertyId] = useState<number | null>(
     null
   );
+  const [editOwnerId, setEditOwnerId] = useState<number>(
+    bundle.selected_owner.id
+  );
+  const [editHasCoOwners, setEditHasCoOwners] = useState<boolean>(false);
+  const [editCoOwners, setEditCoOwners] = useState<PropertyCoOwner[]>([]);
+  const [editHasSubdivisions, setEditHasSubdivisions] =
+    useState<boolean>(false);
   const [editPropCode, setEditPropCode] = useState('');
   const [editPropTitle, setEditPropTitle] = useState('');
   const [editPropAddress, setEditPropAddress] = useState('');
   const [editPropType, setEditPropType] = useState('APARTAMENTO');
   const [editPropRentCop, setEditPropRentCop] = useState<number>(0);
   const [editPropCommissionPct, setEditPropCommissionPct] = useState<number>(8);
+  const [editPropStatus, setEditPropStatus] =
+    useState<PropertyStatus>('DISPONIBLE');
+  const [editSubdivisions, setEditSubdivisions] = useState<SubdivisionDraft[]>(
+    []
+  );
   const [editPropFeedback, setEditPropFeedback] = useState<string | null>(null);
 
   const handleStartEditRootProperty = (prop: Property) => {
+    const childUnits = bundle.properties.filter(
+      (child) =>
+        child.parent_property_id !== null &&
+        Number(child.parent_property_id) === Number(prop.id)
+    );
+    const isMatrix =
+      prop.property_type === 'EDIFICIO MATRIZ' || childUnits.length > 0;
+    const secondaryCo =
+      prop.co_owners?.filter((co) => co.owner_id !== prop.owner_id) ?? [];
+
     setEditingPropertyId(prop.id);
+    setEditOwnerId(prop.owner_id);
+    setEditHasCoOwners(secondaryCo.length > 0);
+    setEditCoOwners(
+      secondaryCo.length > 0
+        ? secondaryCo.map((co) => ({ ...co }))
+        : bundle.all_owners
+            .filter((o) => o.id !== prop.owner_id)
+            .slice(0, 1)
+            .map((o) => ({ owner_id: o.id, share_pct: 50 }))
+    );
+    setEditHasSubdivisions(isMatrix);
     setEditPropCode(prop.code);
     setEditPropTitle(prop.title);
     setEditPropAddress(prop.address);
-    setEditPropType(prop.property_type);
-    setEditPropRentCop(prop.base_rent_cop);
+    setEditPropType(isMatrix ? 'EDIFICIO MATRIZ' : prop.property_type);
+    setEditPropRentCop(prop.base_rent_cop || 1_600_000);
     setEditPropCommissionPct(prop.commission_pct);
+    setEditPropStatus(prop.status);
+    setEditSubdivisions(
+      childUnits.length > 0
+        ? childUnits.map((c) => ({
+            id: `edit-sub-${c.id}`,
+            dbId: c.id,
+            code: c.code,
+            title: c.title,
+            property_type: c.property_type,
+            base_rent_cop: c.base_rent_cop,
+            status: c.status,
+            customCommission: c.commission_pct !== prop.commission_pct,
+            commission_pct: c.commission_pct,
+          }))
+        : [
+            {
+              id: 'edit-sub-new-1',
+              code: 'SUB-101',
+              title: 'Apto 101 - Piso 1',
+              property_type: 'APARTAMENTO',
+              base_rent_cop: 1_500_000,
+              status: 'DISPONIBLE',
+              customCommission: false,
+              commission_pct: prop.commission_pct,
+            },
+          ]
+    );
     setEditPropFeedback(null);
   };
 
+  const editAvailableCoOwnerCandidates = bundle.all_owners.filter(
+    (o) => o.id !== Number(editOwnerId)
+  );
+  const editCoOwnersTotalSharePct = editHasCoOwners
+    ? editCoOwners.reduce((sum, co) => sum + Number(co.share_pct || 0), 0)
+    : 0;
+  const editPrimaryOwnerSharePct = Math.max(0, 100 - editCoOwnersTotalSharePct);
+
+  const handleAddEditCoOwner = () => {
+    const usedIds = new Set([
+      Number(editOwnerId),
+      ...editCoOwners.map((c) => c.owner_id),
+    ]);
+    const nextCandidate =
+      bundle.all_owners.find((o) => !usedIds.has(o.id)) ??
+      editAvailableCoOwnerCandidates[0];
+    if (!nextCandidate) return;
+    setEditCoOwners((prev) => [
+      ...prev,
+      { owner_id: nextCandidate.id, share_pct: 25 },
+    ]);
+  };
+
+  const handleUpdateEditCoOwner = (
+    idx: number,
+    patch: Partial<PropertyCoOwner>
+  ) => {
+    setEditCoOwners((prev) =>
+      prev.map((item, i) => (i === idx ? { ...item, ...patch } : item))
+    );
+  };
+
+  const handleRemoveEditCoOwner = (idx: number) => {
+    setEditCoOwners((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const getEditSubdivisionCommission = (sub: SubdivisionDraft) => {
+    const effPct = sub.customCommission
+      ? sub.commission_pct
+      : editPropCommissionPct;
+    return {
+      effPct,
+      ...calculatePropertyCommission(sub.base_rent_cop, effPct, 0),
+    };
+  };
+
+  const editLiveCommission = calculatePropertyCommission(
+    editPropRentCop,
+    editPropCommissionPct,
+    0
+  );
+  const editSubdivisionsTotalRentCop = editSubdivisions.reduce(
+    (sum, s) => sum + Number(s.base_rent_cop || 0),
+    0
+  );
+  const editSubdivisionsTotalCommissionCop = editSubdivisions.reduce(
+    (sum, s) => sum + getEditSubdivisionCommission(s).totalCommissionCop,
+    0
+  );
+  const editSubdivisionsNetOwnerCop = Math.max(
+    0,
+    editSubdivisionsTotalRentCop - editSubdivisionsTotalCommissionCop
+  );
+
+  const handleAddEditSubdivision = () => {
+    const nextIdx = editSubdivisions.length + 1;
+    setEditSubdivisions((prev) => [
+      ...prev,
+      {
+        id: `edit-sub-${Date.now()}-${nextIdx}`,
+        code: `SUB-10${nextIdx}`,
+        title: `Apto 10${nextIdx}`,
+        property_type: 'APARTAMENTO',
+        base_rent_cop: 1_500_000,
+        status: 'DISPONIBLE',
+        customCommission: false,
+        commission_pct: editPropCommissionPct,
+      },
+    ]);
+  };
+
+  const handleUpdateEditSubdivision = (
+    id: string,
+    patch: Partial<SubdivisionDraft>
+  ) => {
+    setEditSubdivisions((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    );
+  };
+
+  const handleRemoveEditSubdivision = (id: string) => {
+    setEditSubdivisions((prev) =>
+      prev.length > 1 ? prev.filter((item) => item.id !== id) : prev
+    );
+  };
+
   const handleSaveEditRootProperty = (prop: Property) => {
+    const isMulti =
+      editHasSubdivisions || editPropType === 'EDIFICIO MATRIZ';
+    const secondaryCoOwners =
+      editHasCoOwners && editCoOwners.length > 0
+        ? editCoOwners.filter((co) => co.owner_id !== Number(editOwnerId))
+        : [];
+    const normalizedCoOwners: PropertyCoOwner[] | undefined =
+      secondaryCoOwners.length > 0
+        ? [
+            {
+              owner_id: Number(editOwnerId),
+              share_pct: Math.max(
+                0,
+                100 -
+                  secondaryCoOwners.reduce(
+                    (sum, co) => sum + Number(co.share_pct || 0),
+                    0
+                  )
+              ),
+            },
+            ...secondaryCoOwners.map((co) => ({
+              owner_id: Number(co.owner_id),
+              share_pct: Number(co.share_pct),
+            })),
+          ]
+        : undefined;
+
     onUpdateProperty?.({
       id: prop.id,
+      owner_id: Number(editOwnerId),
+      co_owners: normalizedCoOwners,
       code: editPropCode,
       title: editPropTitle,
       address: editPropAddress,
-      property_type:
-        prop.property_type === 'EDIFICIO MATRIZ'
-          ? 'EDIFICIO MATRIZ'
+      property_type: isMulti
+        ? 'EDIFICIO MATRIZ'
+        : editPropType === 'EDIFICIO MATRIZ'
+          ? 'APARTAMENTO'
           : editPropType,
-      base_rent_cop:
-        prop.property_type === 'EDIFICIO MATRIZ' ? 0 : Number(editPropRentCop),
+      base_rent_cop: isMulti ? 0 : Number(editPropRentCop),
       commission_pct: Number(editPropCommissionPct),
+      status: editPropStatus,
+      subdivisions: isMulti
+        ? editSubdivisions.map((s) => ({
+            id: s.dbId,
+            code: s.code,
+            title: s.title,
+            property_type: s.property_type,
+            base_rent_cop: Number(s.base_rent_cop),
+            commission_pct: s.customCommission
+              ? Number(s.commission_pct)
+              : Number(editPropCommissionPct),
+            status: s.status,
+          }))
+        : [],
     });
     setEditPropFeedback(
-      `Propiedad principal "${editPropTitle.trim() || prop.title}" actualizada en SQLite.`
+      `Propiedad principal "${editPropTitle.trim() || prop.title}"${
+        isMulti ? ` y ${editSubdivisions.length} subdivisiones` : ''
+      } actualizada en SQLite.`
     );
     setEditingPropertyId(null);
   };
@@ -1885,20 +2087,14 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                               data-testid={`edit-root-property-btn-${prop.id}`}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (isEditingThis) {
-                                  setEditingPropertyId(null);
-                                } else {
-                                  handleStartEditRootProperty(prop);
-                                }
+                                handleStartEditRootProperty(prop);
                               }}
                               className="px-2 py-0.5 bg-[#1a1b20] border border-[#ffb800]/60 text-[10px] text-[#ffb800] font-bold hover:bg-[#ffb800]/15 uppercase"
                             >
-                              {isEditingThis
-                                ? '[ CANCELAR EDICIÓN ]'
-                                : prop.property_type === 'EDIFICIO MATRIZ' ||
-                                    hasChildren
-                                  ? '[ EDITAR MATRIZ PRINCIPAL ]'
-                                  : '[ EDITAR INMUEBLE PRINCIPAL ]'}
+                              {prop.property_type === 'EDIFICIO MATRIZ' ||
+                              hasChildren
+                                ? '[ EDITAR MATRIZ PRINCIPAL ]'
+                                : '[ EDITAR INMUEBLE PRINCIPAL ]'}
                             </button>
 
                             {hasChildren && (
@@ -1914,121 +2110,6 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                             )}
                           </div>
                         </div>
-
-                        {isEditingThis && (
-                          <div
-                            data-testid={`edit-root-property-panel-${prop.id}`}
-                            className="mt-3 pt-3 border-t border-[#ffb800]/40 bg-[#0d0e12] p-3 space-y-2.5"
-                          >
-                            <div className="text-[10px] font-bold uppercase tracking-wider text-[#ffb800]">
-                              Edición de{' '}
-                              {prop.property_type === 'EDIFICIO MATRIZ' ||
-                              hasChildren
-                                ? 'Matriz Principal'
-                                : 'Inmueble Principal'}{' '}
-                              ([{prop.code}])
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                              <label className="block">
-                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
-                                  Código Principal
-                                </span>
-                                <input
-                                  type="text"
-                                  data-testid={`edit-prop-code-${prop.id}`}
-                                  value={editPropCode}
-                                  onChange={(e) =>
-                                    setEditPropCode(e.target.value)
-                                  }
-                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
-                                />
-                              </label>
-                              <label className="block">
-                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
-                                  Título / Nombre Principal
-                                </span>
-                                <input
-                                  type="text"
-                                  data-testid={`edit-prop-title-${prop.id}`}
-                                  value={editPropTitle}
-                                  onChange={(e) =>
-                                    setEditPropTitle(e.target.value)
-                                  }
-                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
-                                />
-                              </label>
-                              <label className="block sm:col-span-2">
-                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
-                                  Dirección Física
-                                </span>
-                                <input
-                                  type="text"
-                                  data-testid={`edit-prop-address-${prop.id}`}
-                                  value={editPropAddress}
-                                  onChange={(e) =>
-                                    setEditPropAddress(e.target.value)
-                                  }
-                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
-                                />
-                              </label>
-                              <label className="block">
-                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
-                                  % Comisión Base
-                                </span>
-                                <input
-                                  type="number"
-                                  step={0.5}
-                                  min={1}
-                                  max={25}
-                                  data-testid={`edit-prop-commission-${prop.id}`}
-                                  value={editPropCommissionPct}
-                                  onChange={(e) =>
-                                    setEditPropCommissionPct(
-                                      Number(e.target.value)
-                                    )
-                                  }
-                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
-                                />
-                              </label>
-                              {!hasChildren &&
-                                prop.property_type !== 'EDIFICIO MATRIZ' && (
-                                  <label className="block">
-                                    <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
-                                      Canon Base Mensual ($ COP)
-                                    </span>
-                                    <input
-                                      type="number"
-                                      data-testid={`edit-prop-rent-${prop.id}`}
-                                      value={editPropRentCop}
-                                      onChange={(e) =>
-                                        setEditPropRentCop(
-                                          Number(e.target.value)
-                                        )
-                                      }
-                                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1 text-white"
-                                    />
-                                  </label>
-                                )}
-                            </div>
-                            <div className="flex justify-end gap-2 pt-1">
-                              <button
-                                type="button"
-                                onClick={() => setEditingPropertyId(null)}
-                                className="px-2.5 py-1 bg-[#14151a] border border-[#292a2e] text-[10px] text-[#9ca3af] hover:text-white uppercase"
-                              >
-                                [ CANCELAR ]
-                              </button>
-                              <button
-                                type="button"
-                                data-testid={`save-edit-property-btn-${prop.id}`}
-                                onClick={() => handleSaveEditRootProperty(prop)}
-                                className="px-3 py-1 bg-[#ffb800] text-[#0d0e12] text-[10px] font-bold uppercase hover:bg-[#ffb800]/90"
-                              >
-                                [ GUARDAR CAMBIOS ]
-                              </button>
-                            </div>
-                          </div>
-                        )}
                       </div>
 
                       {/* Subdivisions Accordion Drawer */}
@@ -2475,6 +2556,713 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* POPUP MODAL WINDOW: Edición Completa de Matriz Principal / Inmueble y Subdivisiones */}
+      {editingPropertyId !== null &&
+        (() => {
+          const targetEditProp = bundle.properties.find(
+            (p) => p.id === editingPropertyId
+          );
+          if (!targetEditProp) return null;
+
+          return (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Ventana Emergente de Edición de Propiedad y Subdivisiones"
+              data-testid="edit-root-property-modal"
+              className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+            >
+              <div
+                data-testid={`edit-root-property-panel-${targetEditProp.id}`}
+                className="bg-[#0d0e12] border-2 border-[#ffb800] w-full max-w-4xl max-h-[92vh] overflow-y-auto p-6 space-y-5 shadow-2xl font-mono text-xs"
+              >
+                <div className="flex items-start justify-between border-b border-[#292a2e] pb-4 gap-4">
+                  <div>
+                    <div className="text-xs font-mono text-[#ffb800] uppercase tracking-widest font-bold">
+                      02 // EDICIÓN DE REGISTRO DE INMUEBLE Y SUBDIVISIONES
+                    </div>
+                    <h3 className="text-lg font-mono font-bold text-white mt-0.5">
+                      [{targetEditProp.code}] {targetEditProp.title}
+                    </h3>
+                    <p className="text-xs font-mono text-[#9ca3af]">
+                      Modifica titularidad, copropietarios, datos principales,
+                      comisión porcentual y subdivisiones internas.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="close-edit-property-modal-btn"
+                    onClick={() => setEditingPropertyId(null)}
+                    className="px-3 py-1.5 bg-[#1a1b20] border border-[#ff007f]/60 text-[#ff007f] font-mono font-bold text-xs uppercase hover:bg-[#ff007f]/15"
+                  >
+                    [ CERRAR ✕ ]
+                  </button>
+                </div>
+
+                {/* Modalidad de Activo Selector */}
+                <div className="bg-[#14151a] border border-[#292a2e] p-3 space-y-2">
+                  <div className="text-[#9ca3af] uppercase">
+                    Modalidad de Inscripción de Activo:
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      data-testid="edit-mode-single-property"
+                      onClick={() => setEditHasSubdivisions(false)}
+                      className={`px-3 py-2 border text-left transition-colors ${
+                        !editHasSubdivisions
+                          ? 'bg-[#00eefc]/15 border-[#00eefc] text-[#00eefc] font-bold'
+                          : 'bg-[#1a1b20] border-[#292a2e] text-[#9ca3af] hover:text-white'
+                      }`}
+                    >
+                      ( {!editHasSubdivisions ? '•' : ' '} ) INMUEBLE ÚNICO (Sin
+                      subdivisiones)
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="edit-mode-with-subdivisions"
+                      onClick={() => setEditHasSubdivisions(true)}
+                      className={`px-3 py-2 border text-left transition-colors ${
+                        editHasSubdivisions
+                          ? 'bg-[#00eefc]/15 border-[#00eefc] text-[#00eefc] font-bold'
+                          : 'bg-[#1a1b20] border-[#292a2e] text-[#9ca3af] hover:text-white'
+                      }`}
+                    >
+                      ( {editHasSubdivisions ? '•' : ' '} ) PROPIEDAD CON
+                      SUBDIVISIONES
+                    </button>
+                  </div>
+                </div>
+
+                {/* 1. Titularidad: Propietario Principal y Copropietarios */}
+                <div className="space-y-3 bg-[#14151a] border border-[#292a2e] p-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#292a2e] pb-2">
+                    <span className="text-[#00eefc] uppercase tracking-wider font-bold">
+                      1. Titularidad (Propietario Registrado y Copropietarios)
+                    </span>
+                    <label className="flex items-center gap-2 cursor-pointer text-[#ffb800]">
+                      <input
+                        type="checkbox"
+                        data-testid="edit-toggle-co-owners"
+                        checked={editHasCoOwners}
+                        onChange={(e) => setEditHasCoOwners(e.target.checked)}
+                        className="accent-[#ffb800]"
+                      />
+                      <span className="font-bold uppercase">
+                        Incluir Copropietarios
+                      </span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                    <label className="block sm:col-span-8">
+                      <span className="text-[#9ca3af] uppercase block mb-1">
+                        Propietario Principal (Titular Registrado)
+                      </span>
+                      <select
+                        aria-label="Editar Propietario Principal del Inmueble"
+                        data-testid={`edit-prop-owner-${targetEditProp.id}`}
+                        value={editOwnerId}
+                        onChange={(e) =>
+                          setEditOwnerId(Number(e.target.value))
+                        }
+                        className="w-full bg-[#1a1b20] border border-[#00eefc]/60 px-3 py-2 text-white font-bold"
+                      >
+                        {bundle.all_owners.map((owner) => (
+                          <option key={owner.id} value={owner.id}>
+                            {owner.name} — {owner.document_id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="sm:col-span-4 bg-[#1a1b20] border border-[#292a2e] px-3 py-2 flex items-center justify-between">
+                      <span className="text-[#9ca3af] uppercase">
+                        Participación Titular:
+                      </span>
+                      <span
+                        className="text-[#00eefc] font-bold"
+                        data-testid="edit-primary-owner-share-pct"
+                      >
+                        {editPrimaryOwnerSharePct}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {editHasCoOwners && (
+                    <div
+                      data-testid="edit-co-owners-section"
+                      className="space-y-2.5 pt-2 border-t border-[#292a2e]"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-[#ffb800] uppercase font-bold">
+                          Copropietarios Vinculados ({editCoOwners.length})
+                        </span>
+                        <button
+                          type="button"
+                          data-testid="edit-add-co-owner-btn"
+                          onClick={handleAddEditCoOwner}
+                          className="px-2.5 py-1 bg-[#1a1b20] border border-[#ffb800] text-[#ffb800] font-bold hover:bg-[#ffb800]/15"
+                        >
+                          [ + AGREGAR COPROPIETARIO ]
+                        </button>
+                      </div>
+
+                      {editCoOwners.map((co, idx) => (
+                        <div
+                          key={`${co.owner_id}-${idx}`}
+                          data-testid={`edit-co-owner-row-${idx}`}
+                          className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end bg-[#1a1b20] border border-[#ffb800]/40 p-2.5"
+                        >
+                          <label className="sm:col-span-7 block">
+                            <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                              Copropietario #{idx + 1} (De Lista Registrada)
+                            </span>
+                            <select
+                              value={co.owner_id}
+                              onChange={(e) =>
+                                handleUpdateEditCoOwner(idx, {
+                                  owner_id: Number(e.target.value),
+                                })
+                              }
+                              className="w-full bg-[#121317] border border-[#292a2e] px-2.5 py-1.5 text-white"
+                            >
+                              {editAvailableCoOwnerCandidates.map((cand) => (
+                                <option key={cand.id} value={cand.id}>
+                                  {cand.name} — {cand.document_id}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="sm:col-span-3 block">
+                            <span className="text-[10px] text-[#ffb800] uppercase block mb-0.5">
+                              % Participación
+                            </span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={99}
+                              value={co.share_pct}
+                              onChange={(e) =>
+                                handleUpdateEditCoOwner(idx, {
+                                  share_pct: Number(e.target.value),
+                                })
+                              }
+                              className="w-full bg-[#121317] border border-[#292a2e] px-2.5 py-1.5 text-white"
+                            />
+                          </label>
+
+                          <div className="sm:col-span-2 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveEditCoOwner(idx)}
+                              className="w-full py-1.5 bg-[#121317] border border-[#ff3366]/60 text-[#ff3366] hover:bg-[#ff3366]/15"
+                            >
+                              [ ✕ ]
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Datos de la Propiedad Principal */}
+                <div className="space-y-3">
+                  <div className="text-[#00eefc] uppercase tracking-wider font-bold border-b border-[#292a2e] pb-1">
+                    2. Datos de la Propiedad Principal{' '}
+                    {editHasSubdivisions ? '(Matriz)' : '(Activo Único)'}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="text-[#9ca3af] uppercase block mb-1">
+                        Código Principal
+                      </span>
+                      <input
+                        type="text"
+                        data-testid={`edit-prop-code-${targetEditProp.id}`}
+                        value={editPropCode}
+                        onChange={(e) => setEditPropCode(e.target.value)}
+                        className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[#9ca3af] uppercase block mb-1">
+                        Título / Nombre de la Propiedad
+                      </span>
+                      <input
+                        type="text"
+                        data-testid={`edit-prop-title-${targetEditProp.id}`}
+                        value={editPropTitle}
+                        onChange={(e) => setEditPropTitle(e.target.value)}
+                        className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[#9ca3af] uppercase block mb-1">
+                        Tipología Principal
+                      </span>
+                      <select
+                        data-testid={`edit-prop-type-${targetEditProp.id}`}
+                        value={
+                          editHasSubdivisions ? 'EDIFICIO MATRIZ' : editPropType
+                        }
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setEditPropType(val);
+                          if (val === 'EDIFICIO MATRIZ') {
+                            setEditHasSubdivisions(true);
+                          } else if (editHasSubdivisions) {
+                            setEditHasSubdivisions(false);
+                          }
+                        }}
+                        className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                      >
+                        <option value="APARTAMENTO">APARTAMENTO</option>
+                        <option value="LOCAL COMERCIAL">LOCAL COMERCIAL</option>
+                        <option value="CASA">CASA</option>
+                        <option value="BODEGA">BODEGA</option>
+                        <option value="OFICINA">OFICINA</option>
+                        <option value="EDIFICIO MATRIZ">EDIFICIO MATRIZ</option>
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[#9ca3af] uppercase block mb-1">
+                        Dirección Física
+                      </span>
+                      <input
+                        type="text"
+                        data-testid={`edit-prop-address-${targetEditProp.id}`}
+                        value={editPropAddress}
+                        onChange={(e) => setEditPropAddress(e.target.value)}
+                        className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                      />
+                    </label>
+
+                    {!editHasSubdivisions && (
+                      <>
+                        <label className="block">
+                          <span className="text-[#9ca3af] uppercase block mb-1">
+                            Canon Base Mensual ($ COP)
+                          </span>
+                          <input
+                            type="number"
+                            data-testid={`edit-prop-rent-${targetEditProp.id}`}
+                            value={editPropRentCop}
+                            onChange={(e) =>
+                              setEditPropRentCop(Number(e.target.value))
+                            }
+                            className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                          />
+                          <span className="text-[11px] text-[#00eefc] mt-1 block">
+                            {formatCop(editPropRentCop)} —{' '}
+                            {formatCopInWords(editPropRentCop)}
+                          </span>
+                        </label>
+
+                        <label className="block">
+                          <span className="text-[#9ca3af] uppercase block mb-1">
+                            Estado Inicial
+                          </span>
+                          <select
+                            data-testid={`edit-prop-status-${targetEditProp.id}`}
+                            value={editPropStatus}
+                            onChange={(e) =>
+                              setEditPropStatus(
+                                e.target.value as 'DISPONIBLE' | 'OCUPADO'
+                              )
+                            }
+                            className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                          >
+                            <option value="DISPONIBLE">DISPONIBLE</option>
+                            <option value="OCUPADO">OCUPADO</option>
+                          </select>
+                        </label>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. Condiciones Comerciales de Agencia (Base) */}
+                <div className="space-y-3">
+                  <div className="text-[#00eefc] uppercase tracking-wider font-bold border-b border-[#292a2e] pb-1">
+                    2. Condiciones Comerciales de Agencia{' '}
+                    {editHasSubdivisions
+                      ? '(Valores Base por Defecto para Subdivisiones)'
+                      : '(Comisión Porcentual)'}
+                  </div>
+
+                  <div className="bg-[#1a1b20] border border-[#292a2e] p-3 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <label
+                        htmlFor={`edit-slider-commission-${targetEditProp.id}`}
+                        className="text-[#9ca3af] uppercase"
+                      >
+                        Comisión Porcentual (%)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          step={0.5}
+                          min={1}
+                          max={25}
+                          data-testid={`edit-prop-commission-${targetEditProp.id}`}
+                          value={editPropCommissionPct}
+                          onChange={(e) =>
+                            setEditPropCommissionPct(Number(e.target.value))
+                          }
+                          className="w-20 bg-[#121317] border border-[#00eefc]/60 px-2 py-1 text-right text-[#00eefc] font-bold"
+                        />
+                        <span className="text-[#00eefc] font-bold">%</span>
+                      </div>
+                    </div>
+                    <input
+                      id={`edit-slider-commission-${targetEditProp.id}`}
+                      type="range"
+                      min={4}
+                      max={15}
+                      step={0.5}
+                      value={editPropCommissionPct}
+                      onChange={(e) =>
+                        setEditPropCommissionPct(Number(e.target.value))
+                      }
+                      className="w-full accent-[#00eefc] cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[11px] text-[#9ca3af]">
+                      <span>Mín: 4.0%</span>
+                      <span>
+                        Equivale a{' '}
+                        {formatCop(editLiveCommission.percentageFeeCop)}
+                      </span>
+                      <span>Máx: 15.0%</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Constructor Dinámico de Subdivisiones */}
+                {editHasSubdivisions && (
+                  <div
+                    className="space-y-3"
+                    data-testid="edit-subdivisions-builder"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#292a2e] pb-2">
+                      <span className="text-[#00eefc] uppercase tracking-wider font-bold">
+                        3. Subdivisiones / Unidades Internas (
+                        {editSubdivisions.length})
+                      </span>
+                      <button
+                        type="button"
+                        data-testid="edit-add-subdivision-btn"
+                        onClick={handleAddEditSubdivision}
+                        className="px-3 py-1 bg-[#1a1b20] border border-[#00eefc] text-[#00eefc] font-bold hover:bg-[#00eefc]/15"
+                      >
+                        [ + AGREGAR SUBDIVISIÓN ]
+                      </button>
+                    </div>
+
+                    <div className="space-y-3 max-h-[340px] overflow-y-auto pr-1">
+                      {editSubdivisions.map((sub, idx) => {
+                        const subComm = getEditSubdivisionCommission(sub);
+                        const subNetCop = Math.max(
+                          0,
+                          Number(sub.base_rent_cop || 0) -
+                            subComm.totalCommissionCop
+                        );
+                        return (
+                          <div
+                            key={sub.id}
+                            data-testid={`edit-subdivision-row-${idx}`}
+                            className="p-3 bg-[#14151a] border border-[#292a2e] space-y-2.5"
+                          >
+                            <div className="flex items-center justify-between border-b border-[#292a2e] pb-1.5">
+                              <span className="text-[#00eefc] font-bold">
+                                DIVISIÓN #{idx + 1} // {sub.code || 'SIN-CÓDIGO'}
+                              </span>
+                              <div className="flex items-center gap-3">
+                                <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#ffb800]">
+                                  <input
+                                    type="checkbox"
+                                    data-testid={`edit-subdivision-custom-comm-toggle-${idx}`}
+                                    checked={sub.customCommission}
+                                    onChange={(e) =>
+                                      handleUpdateEditSubdivision(sub.id, {
+                                        customCommission: e.target.checked,
+                                        commission_pct: sub.customCommission
+                                          ? sub.commission_pct
+                                          : editPropCommissionPct,
+                                      })
+                                    }
+                                    className="accent-[#ffb800]"
+                                  />
+                                  <span>Comisión por división</span>
+                                </label>
+                                {editSubdivisions.length > 1 && (
+                                  <button
+                                    type="button"
+                                    data-testid={`edit-remove-subdivision-${idx}`}
+                                    onClick={() =>
+                                      handleRemoveEditSubdivision(sub.id)
+                                    }
+                                    className="px-2 py-0.5 bg-[#1a1b20] border border-[#ff3366]/60 text-[#ff3366] hover:bg-[#ff3366]/15"
+                                    title="Eliminar subdivisión"
+                                  >
+                                    [ ✕ ]
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                              <label className="sm:col-span-2 block">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  Código
+                                </span>
+                                <input
+                                  type="text"
+                                  data-testid={`edit-subdivision-code-${idx}`}
+                                  value={sub.code}
+                                  onChange={(e) =>
+                                    handleUpdateEditSubdivision(sub.id, {
+                                      code: e.target.value,
+                                    })
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1.5 text-white"
+                                />
+                              </label>
+
+                              <label className="sm:col-span-4 block">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  Unidad / Título
+                                </span>
+                                <input
+                                  type="text"
+                                  data-testid={`edit-subdivision-title-${idx}`}
+                                  value={sub.title}
+                                  onChange={(e) =>
+                                    handleUpdateEditSubdivision(sub.id, {
+                                      title: e.target.value,
+                                    })
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1.5 text-white"
+                                />
+                              </label>
+
+                              <label className="sm:col-span-2 block">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  Tipología
+                                </span>
+                                <select
+                                  data-testid={`edit-subdivision-type-${idx}`}
+                                  value={sub.property_type}
+                                  onChange={(e) =>
+                                    handleUpdateEditSubdivision(sub.id, {
+                                      property_type: e.target.value,
+                                    })
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1.5 text-white"
+                                >
+                                  <option value="APARTAMENTO">
+                                    APARTAMENTO
+                                  </option>
+                                  <option value="LOCAL COMERCIAL">
+                                    LOCAL COMERCIAL
+                                  </option>
+                                  <option value="OFICINA">OFICINA</option>
+                                  <option value="BODEGA">BODEGA</option>
+                                  <option value="CASA">CASA</option>
+                                </select>
+                              </label>
+
+                              <label className="sm:col-span-2 block">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  Canon ($ COP)
+                                </span>
+                                <input
+                                  type="number"
+                                  data-testid={`edit-subdivision-rent-${idx}`}
+                                  value={sub.base_rent_cop}
+                                  onChange={(e) =>
+                                    handleUpdateEditSubdivision(sub.id, {
+                                      base_rent_cop: Number(e.target.value),
+                                    })
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1.5 text-white"
+                                />
+                                <span className="text-[10px] text-[#00eefc] mt-1 block leading-tight">
+                                  {formatCop(sub.base_rent_cop)} —{' '}
+                                  {formatCopInWords(sub.base_rent_cop)}
+                                </span>
+                              </label>
+
+                              <label className="sm:col-span-2 block">
+                                <span className="text-[10px] text-[#9ca3af] uppercase block mb-0.5">
+                                  Estado
+                                </span>
+                                <select
+                                  data-testid={`edit-subdivision-status-${idx}`}
+                                  value={sub.status}
+                                  onChange={(e) =>
+                                    handleUpdateEditSubdivision(sub.id, {
+                                      status: e.target.value as
+                                        | 'DISPONIBLE'
+                                        | 'OCUPADO',
+                                    })
+                                  }
+                                  className="w-full bg-[#1a1b20] border border-[#292a2e] px-2 py-1.5 text-white"
+                                >
+                                  <option value="DISPONIBLE">DISPONIBLE</option>
+                                  <option value="OCUPADO">OCUPADO</option>
+                                </select>
+                              </label>
+                            </div>
+
+                            {sub.customCommission ? (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2.5 bg-[#1a1b20] border border-[#ffb800]/50">
+                                <label className="block">
+                                  <span className="text-[10px] text-[#ffb800] uppercase block mb-0.5">
+                                    % Comisión División
+                                  </span>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={25}
+                                    step={0.5}
+                                    data-testid={`edit-subdivision-commission-${idx}`}
+                                    value={sub.commission_pct}
+                                    onChange={(e) =>
+                                      handleUpdateEditSubdivision(sub.id, {
+                                        commission_pct: Number(e.target.value),
+                                      })
+                                    }
+                                    className="w-full bg-[#121317] border border-[#292a2e] px-2 py-1 text-white"
+                                  />
+                                </label>
+
+                                <div className="flex flex-col justify-center text-right">
+                                  <span className="text-[10px] text-[#9ca3af] uppercase">
+                                    Comisión División (
+                                    {subComm.effPct.toFixed(1)}%)
+                                  </span>
+                                  <span className="text-xs font-bold text-[#ffb800]">
+                                    -{formatCop(subComm.totalCommissionCop)} ·
+                                    Neto: {formatCop(subNetCop)}
+                                  </span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-between text-[11px] text-[#9ca3af] pt-0.5">
+                                <span>
+                                  Comisión heredada de propiedad base:{' '}
+                                  <strong className="text-white">
+                                    {editPropCommissionPct.toFixed(1)}%
+                                  </strong>
+                                </span>
+                                <span className="text-[#00eefc] font-bold">
+                                  Comisión: -
+                                  {formatCop(subComm.totalCommissionCop)} ·
+                                  Neto: {formatCop(subNetCop)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Live Formula Preview Box */}
+                <div className="bg-[#121317] border border-[#00eefc]/40 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  {!editHasSubdivisions ? (
+                    <>
+                      <div>
+                        <span className="text-[#9ca3af] block">
+                          FÓRMULA: INGRESO BRUTO × % COMISIÓN
+                        </span>
+                        <span className="text-white">
+                          {formatCop(editPropRentCop)} ×{' '}
+                          {editPropCommissionPct.toFixed(1)}% · Neto
+                          Propietario:{' '}
+                          <strong className="text-[#00FF66]">
+                            {formatCop(
+                              Math.max(
+                                0,
+                                editPropRentCop -
+                                  editLiveCommission.totalCommissionCop
+                              )
+                            )}
+                          </strong>
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[#9ca3af] block">
+                          COMISIÓN TOTAL AGENCIA
+                        </span>
+                        <span className="text-base font-bold text-[#00eefc]">
+                          {formatCop(editLiveCommission.totalCommissionCop)}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="space-y-0.5">
+                        <span className="text-[#9ca3af] block">
+                          INGRESOS POR SUBDIVISIONES (1 MATRIZ +{' '}
+                          {editSubdivisions.length} UNIDADES)
+                        </span>
+                        <span className="text-white block">
+                          Ingresos Brutos Subdivisiones:{' '}
+                          <strong>
+                            {formatCop(editSubdivisionsTotalRentCop)}
+                          </strong>{' '}
+                          · Neto Propietario:{' '}
+                          <strong className="text-[#00FF66]">
+                            {formatCop(editSubdivisionsNetOwnerCop)}
+                          </strong>
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[#9ca3af] block">
+                          COMISIÓN TOTAL SUBDIVISIONES
+                        </span>
+                        <span className="text-base font-bold text-[#00eefc]">
+                          {formatCop(editSubdivisionsTotalCommissionCop)}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Action Footer */}
+                <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-[#292a2e]">
+                  <button
+                    type="button"
+                    onClick={() => setEditingPropertyId(null)}
+                    className="px-4 py-2.5 bg-[#14151a] border border-[#292a2e] text-xs text-[#9ca3af] hover:text-white uppercase font-bold"
+                  >
+                    [ CANCELAR ]
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={`save-edit-property-btn-${targetEditProp.id}`}
+                    onClick={() => handleSaveEditRootProperty(targetEditProp)}
+                    className="px-5 py-2.5 bg-[#ffb800] text-[#0d0e12] text-xs font-bold uppercase tracking-wider hover:bg-[#ffb800]/90"
+                  >
+                    {editHasSubdivisions
+                      ? `[ GUARDAR CAMBIOS DE PROPIEDAD Y ${editSubdivisions.length} SUBDIVISIONES EN SQLITE ]`
+                      : '[ GUARDAR CAMBIOS DE PROPIEDAD ÚNICA EN SQLITE ]'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </section>
   );
 };
