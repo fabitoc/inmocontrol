@@ -76,20 +76,13 @@ export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
       <div className="bg-[#0d0e12] border border-[#292a2e] p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-xs font-mono text-[#00eefc] uppercase tracking-widest">
-            <span>MÓDULO 01 // TELEMETRÍA DE PORTAFOLIO</span>
-            <span className="text-[#9ca3af]">|</span>
-            <span data-testid="dashboard-latency-badge">
-              SQLITE_JOIN: {bundle.query_time_ms.toFixed(2)}ms (&lt;300ms SLA)
-            </span>
+            <span>MÓDULO 01 // RESUMEN DE PORTAFOLIO</span>
           </div>
           <h2 className="text-xl font-bold tracking-tight text-white mt-1">
             Dashboard Analítico — {bundle.selected_owner.name}
           </h2>
           <p className="text-xs font-mono text-[#9ca3af] mt-0.5">
-            ID Fiscal: {bundle.selected_owner.document_id} · Dispersión:{' '}
-            {bundle.selected_owner.bank_name} (
-            {bundle.selected_owner.bank_account_type}{' '}
-            {bundle.selected_owner.bank_account_number})
+            ID Fiscal: {bundle.selected_owner.document_id}
           </p>
         </div>
 
@@ -199,8 +192,8 @@ export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
           </div>
 
           <div className="border-t border-[#292a2e] pt-3 flex items-center justify-between text-xs font-mono text-[#9ca3af]">
-            <span>FILTRO REACTIVO ACTIVO</span>
-            <span className="text-[#00FF66]">WAL INDEXED</span>
+            <span>PARTICIPACIÓN POR PORTAFOLIO</span>
+            <span className="text-[#00FF66]">ACTUALIZADO</span>
           </div>
         </div>
 
@@ -285,7 +278,7 @@ export const DashboardAnaliticoView: React.FC<DashboardAnaliticoViewProps> = ({
               </p>
             </div>
             <div className="text-xs font-mono text-[#9ca3af]">
-              Soporte en %LocalAppData%\InmoControl\evidencias\
+              Descuento directo en liquidación mensual
             </div>
           </div>
 

@@ -4,11 +4,13 @@ import {
   NewOwnerInput,
   NewPropertyInput,
   NewRentPaymentInput,
+  Owner,
   OwnerDashboardBundle,
   Property,
   PropertyCoOwner,
   PropertyStatus,
   TenantContract,
+  UpdateOwnerInput,
   UpdatePropertyInput,
 } from '../../types/domain';
 import {
@@ -38,6 +40,7 @@ interface SubdivisionDraft {
 interface RegistroControlViewProps {
   bundle: OwnerDashboardBundle;
   onCreateOwner: (input: NewOwnerInput) => void;
+  onUpdateOwner?: (input: UpdateOwnerInput) => Owner | void;
   onCreateProperty: (input: NewPropertyInput) => Property | void;
   onUpdateProperty?: (input: UpdatePropertyInput) => Property | void;
   onCreateContract: (input: NewContractInput) => TenantContract | void;
@@ -56,31 +59,48 @@ const TABS: Array<{
     id: 'propietario',
     code: '01',
     label: '01 // Registro de Propietario',
-    subtitle: 'TABLA: owners · Directorio de Propietarios',
+    subtitle: 'Directorio de Propietarios',
   },
   {
     id: 'inmueble',
     code: '02',
     label: '02 // Registro de Inmueble',
-    subtitle: 'TABLA: properties · Jerarquía Matriz / Sub-unidad',
+    subtitle: 'Jerarquía Matriz / Sub-unidad',
   },
   {
     id: 'inquilino',
     code: '03',
     label: '03 // Vinculación de Inquilino',
-    subtitle: 'TABLA: tenant_contracts · Pólizas y Arrendamiento',
+    subtitle: 'Pólizas y Arrendamiento',
   },
 ];
 
 export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
   bundle,
   onCreateOwner,
+  onUpdateOwner,
   onCreateProperty,
   onUpdateProperty,
   onCreateContract,
   onRecordPayment,
 }) => {
   const [activeTab, setActiveTab] = useState<RegistroControlTab>('propietario');
+  const ownerSubmitLockRef = useRef<boolean>(false);
+  const editOwnerSubmitLockRef = useRef<boolean>(false);
+  const propSubmitLockRef = useRef<boolean>(false);
+  const contractSubmitLockRef = useRef<boolean>(false);
+  const editPropSubmitLockRef = useRef<boolean>(false);
+
+  const acquireFormLock = (
+    lockRef: React.MutableRefObject<boolean>
+  ): boolean => {
+    if (lockRef.current) return false;
+    lockRef.current = true;
+    setTimeout(() => {
+      lockRef.current = false;
+    }, 350);
+    return true;
+  };
 
   // 01 // Owner Registration Form State
   const [ownerName, setOwnerName] = useState('');
@@ -89,6 +109,76 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
   const [ownerEmail, setOwnerEmail] = useState('');
   const [ownerCutoffDay, setOwnerCutoffDay] = useState<number>(5);
   const [ownerFeedback, setOwnerFeedback] = useState<string | null>(null);
+  const [ownerError, setOwnerError] = useState<string | null>(null);
+
+  // 01 // Owner Popup Modal Edit State
+  const [editingOwnerId, setEditingOwnerId] = useState<number | null>(null);
+  const [editOwnerName, setEditOwnerName] = useState('');
+  const [editOwnerDoc, setEditOwnerDoc] = useState('');
+  const [editOwnerPhone, setEditOwnerPhone] = useState('');
+  const [editOwnerEmail, setEditOwnerEmail] = useState('');
+  const [editOwnerCutoffDay, setEditOwnerCutoffDay] = useState<number>(5);
+  const [editOwnerFeedback, setEditOwnerFeedback] = useState<string | null>(
+    null
+  );
+  const [editOwnerError, setEditOwnerError] = useState<string | null>(null);
+
+  const handleStartEditOwner = (owner: Owner) => {
+    setEditingOwnerId(owner.id);
+    setEditOwnerName(owner.name);
+    setEditOwnerDoc(owner.document_id);
+    setEditOwnerPhone(owner.phone);
+    setEditOwnerEmail(owner.email);
+    setEditOwnerCutoffDay(owner.cutoff_day ?? 5);
+    setEditOwnerError(null);
+    setEditOwnerFeedback(null);
+  };
+
+  const handleSaveEditOwner = (owner: Owner) => {
+    const trimmedName = editOwnerName.trim();
+    const trimmedDoc = editOwnerDoc.trim();
+    const trimmedPhone = editOwnerPhone.trim();
+    const trimmedEmail = editOwnerEmail.trim();
+
+    if (!trimmedName || !trimmedDoc || !trimmedPhone || !trimmedEmail) {
+      setEditOwnerError(
+        'Operación bloqueada: Todos los campos del propietario (nombre, documento, teléfono y correo electrónico) son obligatorios.'
+      );
+      return;
+    }
+
+    const normDoc = trimmedDoc.toUpperCase();
+    const normName = trimmedName.toUpperCase();
+    const isDuplicateOther = bundle.all_owners.some(
+      (o) =>
+        o.id !== owner.id &&
+        (o.document_id.trim().toUpperCase() === normDoc ||
+          o.name.trim().toUpperCase() === normName)
+    );
+    if (isDuplicateOther) {
+      setEditOwnerError(
+        `Operación bloqueada: Ya existe otro propietario registrado con el documento "${trimmedDoc}" o nombre "${trimmedName}".`
+      );
+      return;
+    }
+
+    if (!acquireFormLock(editOwnerSubmitLockRef)) return;
+
+    onUpdateOwner?.({
+      id: owner.id,
+      name: trimmedName,
+      document_id: trimmedDoc,
+      phone: trimmedPhone,
+      email: trimmedEmail,
+      cutoff_day: Number(editOwnerCutoffDay),
+    });
+
+    setEditOwnerError(null);
+    setEditOwnerFeedback(
+      `Datos del propietario "${trimmedName}" actualizados correctamente (Corte/Liquidación: Día ${editOwnerCutoffDay}).`
+    );
+    setEditingOwnerId(null);
+  };
 
   // 02 // Property & Subdivisions Registration Form State
   const [selectedOwnerForProp, setSelectedOwnerForProp] = useState<number>(
@@ -136,6 +226,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
     []
   );
   const [editPropFeedback, setEditPropFeedback] = useState<string | null>(null);
+  const [editPropError, setEditPropError] = useState<string | null>(null);
 
   const handleStartEditRootProperty = (prop: Property) => {
     const childUnits = bundle.properties.filter(
@@ -194,6 +285,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
           ]
     );
     setEditPropFeedback(null);
+    setEditPropError(null);
   };
 
   const editAvailableCoOwnerCandidates = bundle.all_owners.filter(
@@ -295,6 +387,43 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
   const handleSaveEditRootProperty = (prop: Property) => {
     const isMulti =
       editHasSubdivisions || editPropType === 'EDIFICIO MATRIZ';
+
+    if (
+      !editPropCode.trim() ||
+      !editPropTitle.trim() ||
+      !editPropAddress.trim()
+    ) {
+      setEditPropError(
+        'Operación bloqueada: El código, título y dirección de la propiedad son obligatorios.'
+      );
+      return;
+    }
+
+    if (!isMulti && Number(editPropRentCop) <= 0) {
+      setEditPropError(
+        'Operación bloqueada: El canon mensual del inmueble debe ser mayor a $0 COP.'
+      );
+      return;
+    }
+
+    if (
+      isMulti &&
+      (editSubdivisions.length === 0 ||
+        editSubdivisions.some(
+          (s) =>
+            !s.code.trim() ||
+            !s.title.trim() ||
+            Number(s.base_rent_cop) <= 0
+        ))
+    ) {
+      setEditPropError(
+        'Operación bloqueada: Todas las subdivisiones deben tener código, título y canon mensual mayor a $0 COP.'
+      );
+      return;
+    }
+
+    if (!acquireFormLock(editPropSubmitLockRef)) return;
+
     const secondaryCoOwners =
       editHasCoOwners && editCoOwners.length > 0
         ? editCoOwners.filter((co) => co.owner_id !== Number(editOwnerId))
@@ -324,9 +453,9 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       id: prop.id,
       owner_id: Number(editOwnerId),
       co_owners: normalizedCoOwners,
-      code: editPropCode,
-      title: editPropTitle,
-      address: editPropAddress,
+      code: editPropCode.trim().toUpperCase(),
+      title: editPropTitle.trim(),
+      address: editPropAddress.trim(),
       property_type: isMulti
         ? 'EDIFICIO MATRIZ'
         : editPropType === 'EDIFICIO MATRIZ'
@@ -338,8 +467,8 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       subdivisions: isMulti
         ? editSubdivisions.map((s) => ({
             id: s.dbId,
-            code: s.code,
-            title: s.title,
+            code: s.code.trim().toUpperCase(),
+            title: s.title.trim(),
             property_type: s.property_type,
             base_rent_cop: Number(s.base_rent_cop),
             commission_pct: s.customCommission
@@ -349,10 +478,11 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
           }))
         : [],
     });
+    setEditPropError(null);
     setEditPropFeedback(
       `Propiedad principal "${editPropTitle.trim() || prop.title}"${
         isMulti ? ` y ${editSubdivisions.length} subdivisiones` : ''
-      } actualizada en SQLite (Vigente desde ${currentSystemPeriod} en adelante · Periodos anteriores intactos).`
+      } actualizada correctamente (Vigente desde ${currentSystemPeriod} en adelante · Periodos anteriores intactos).`
     );
     setEditingPropertyId(null);
   };
@@ -393,6 +523,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
     },
   ]);
   const [propFeedback, setPropFeedback] = useState<string | null>(null);
+  const [propError, setPropError] = useState<string | null>(null);
 
   // 03 // Tenant Contract Form State
   const currentSystemPeriod = getCurrentPeriodMonth();
@@ -634,40 +765,140 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
 
   const handleOwnerSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ownerName.trim() || !ownerDoc.trim()) return;
+    const trimmedName = ownerName.trim();
+    const trimmedDoc = ownerDoc.trim();
+    const trimmedPhone = ownerPhone.trim();
+    const trimmedEmail = ownerEmail.trim();
+
+    if (!trimmedName || !trimmedDoc || !trimmedPhone || !trimmedEmail) {
+      setOwnerError(
+        'Operación bloqueada: Debes completar todos los campos del propietario (nombre, documento, teléfono y correo electrónico) antes de guardar.'
+      );
+      setOwnerFeedback(null);
+      return;
+    }
+
+    const normalizedDoc = trimmedDoc.toUpperCase();
+    const normalizedName = trimmedName.toUpperCase();
+    const isDuplicateOwner = bundle.all_owners.some(
+      (o) =>
+        o.document_id.trim().toUpperCase() === normalizedDoc ||
+        o.name.trim().toUpperCase() === normalizedName
+    );
+    if (isDuplicateOwner) {
+      setOwnerError(
+        `Operación bloqueada: Ya existe un propietario registrado con el documento "${trimmedDoc}" o nombre "${trimmedName}".`
+      );
+      setOwnerFeedback(null);
+      return;
+    }
+
+    if (!acquireFormLock(ownerSubmitLockRef)) return;
+
     onCreateOwner({
-      name: ownerName.trim(),
-      document_id: ownerDoc.trim(),
-      phone: ownerPhone.trim() || '+57 300 000 0000',
-      email: ownerEmail.trim() || 'contacto@inmocontrol.co',
+      name: trimmedName,
+      document_id: trimmedDoc,
+      phone: trimmedPhone,
+      email: trimmedEmail,
       bank_name: 'N/A',
       bank_account_type: 'N/A',
       bank_account_number: 'N/A',
       cutoff_day: Number(ownerCutoffDay),
     });
+    setOwnerError(null);
     setOwnerFeedback(
-      `Propietario "${ownerName.trim()}" registrado en SQLite (Corte/Liquidación: Día ${ownerCutoffDay}).`
+      `Propietario "${trimmedName}" registrado correctamente (Corte/Liquidación: Día ${ownerCutoffDay}).`
     );
     setOwnerName('');
     setOwnerDoc('');
     setOwnerPhone('');
     setOwnerEmail('');
+    setOwnerCutoffDay(5);
   };
 
   const handlePropertySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const isMultiMode = hasSubdivisions || propType === 'EDIFICIO MATRIZ';
-    const suffix = String(bundle.properties.length + 1).padStart(2, '0');
-    const resolvedCode = (
-      propCode.trim() || (isMultiMode ? `MAT-NORTE-${suffix}` : `APT-FACA-${suffix}`)
-    ).toUpperCase();
-    const resolvedTitle =
-      propTitle.trim() ||
-      (isMultiMode
-        ? `Edificio Matriz ${suffix}`
-        : `Inmueble Registrado ${suffix}`);
-    const resolvedAddress =
-      propAddress.trim() || 'Dirección Registrada Localmente';
+    const trimmedCode = propCode.trim().toUpperCase();
+    const trimmedTitle = propTitle.trim();
+    const trimmedAddress = propAddress.trim();
+
+    if (!trimmedCode || !trimmedTitle || !trimmedAddress) {
+      setPropError(
+        'Operación bloqueada: Debes completar el código principal, título y dirección física del inmueble antes de guardar.'
+      );
+      setPropFeedback(null);
+      return;
+    }
+
+    if (!isMultiMode && Number(baseRentCop) <= 0) {
+      setPropError(
+        'Operación bloqueada: El canon base mensual del inmueble debe ser mayor a $0 COP.'
+      );
+      setPropFeedback(null);
+      return;
+    }
+
+    if (
+      hasCoOwners &&
+      (coOwners.length === 0 ||
+        coOwners.some((co) => Number(co.share_pct) <= 0) ||
+        coOwnersTotalSharePct >= 100)
+    ) {
+      setPropError(
+        'Operación bloqueada: La participación de los copropietarios debe ser mayor a 0% y menor al 100% total.'
+      );
+      setPropFeedback(null);
+      return;
+    }
+
+    const existingCodes = new Set(
+      bundle.properties.map((p) => p.code.trim().toUpperCase())
+    );
+    if (existingCodes.has(trimmedCode)) {
+      setPropError(
+        `Operación bloqueada: Ya existe un inmueble registrado con el código "${trimmedCode}".`
+      );
+      setPropFeedback(null);
+      return;
+    }
+
+    if (isMultiMode) {
+      if (
+        subdivisions.length === 0 ||
+        subdivisions.some(
+          (s) =>
+            !s.code.trim() ||
+            !s.title.trim() ||
+            Number(s.base_rent_cop) <= 0
+        )
+      ) {
+        setPropError(
+          'Operación bloqueada: Todas las subdivisiones deben tener código, título y canon mensual mayor a $0 COP.'
+        );
+        setPropFeedback(null);
+        return;
+      }
+
+      const subCodesSeen = new Set<string>([trimmedCode]);
+      for (const sub of subdivisions) {
+        const normSubCode = sub.code.trim().toUpperCase();
+        if (existingCodes.has(normSubCode) || subCodesSeen.has(normSubCode)) {
+          setPropError(
+            `Operación bloqueada: El código de subdivisión "${normSubCode}" está duplicado o ya existe.`
+          );
+          setPropFeedback(null);
+          return;
+        }
+        subCodesSeen.add(normSubCode);
+      }
+    }
+
+    if (!acquireFormLock(propSubmitLockRef)) return;
+
+    const resolvedCode = trimmedCode;
+    const resolvedTitle = trimmedTitle;
+    const resolvedAddress = trimmedAddress;
     const targetOwnerObj =
       bundle.all_owners.find((o) => o.id === Number(selectedOwnerForProp)) ??
       bundle.selected_owner;
@@ -723,13 +954,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       const coText = secondaryCoOwners.length
         ? ` (+ ${secondaryCoOwners.length} copropietario(s))`
         : '';
+      setPropError(null);
       setPropFeedback(
         `Inmueble único "${resolvedTitle}" vinculado a ${targetOwnerObj.name}${coText}.`
       );
     } else {
-      const validSubs = subdivisions.filter(
-        (s) => s.code.trim() || s.title.trim()
-      );
+      const validSubs = subdivisions;
       const createdParent = onCreateProperty({
         owner_id: targetOwnerObj.id,
         co_owners: normalizedCoOwners,
@@ -761,8 +991,8 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
         const effPct = sub.customCommission
           ? Number(sub.commission_pct)
           : Number(commissionPct);
-        const subCode = (sub.code.trim() || `SUB-10${idx + 1}`).toUpperCase();
-        const subTitle = sub.title.trim() || `Unidad ${idx + 1}`;
+        const subCode = sub.code.trim().toUpperCase();
+        const subTitle = sub.title.trim();
 
         const createdSub = onCreateProperty({
           owner_id: targetOwnerObj.id,
@@ -787,14 +1017,26 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       const coText = secondaryCoOwners.length
         ? ` (+ ${secondaryCoOwners.length} copropietario(s))`
         : '';
+      setPropError(null);
       setPropFeedback(
         `Propiedad Matriz "${resolvedTitle}" + ${validSubs.length} subdivisiones vinculadas a ${targetOwnerObj.name}${coText}.`
+      );
+      setSubdivisions((prev) =>
+        prev.map((s, idx) => ({
+          ...s,
+          id: `sub-reset-${Date.now()}-${idx}`,
+          code: '',
+          title: '',
+          customCommission: false,
+          commission_pct: Number(commissionPct),
+        }))
       );
     }
 
     setPropCode('');
     setPropTitle('');
     setPropAddress('');
+    setHasCoOwners(false);
   };
 
   const rawContractStartPeriod =
@@ -825,15 +1067,54 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
 
   const handleContractSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tenantName.trim() || !tenantDocument.trim()) {
+    if (
+      !tenantName.trim() ||
+      !tenantDocument.trim() ||
+      !guarantorName.trim() ||
+      !startDate.trim()
+    ) {
       setContractError(
-        'Debes ingresar el nombre y documento del inquilino para formalizar el contrato.'
+        'Operación bloqueada: Debes completar todos los campos del inquilino (nombre, documento, codeudor/póliza y fecha de inicio) para formalizar el contrato.'
+      );
+      setContractFeedback(null);
+      return;
+    }
+
+    const targetProperty = rentableProperties.find(
+      (p) => p.id === Number(selectedPropertyId)
+    );
+    if (!targetProperty) {
+      setContractError(
+        'Operación bloqueada: Debes seleccionar un inmueble válido para vincular el contrato.'
+      );
+      setContractFeedback(null);
+      return;
+    }
+
+    const hasActiveContractOnProperty =
+      targetProperty.status === 'OCUPADO' ||
+      bundle.contracts.some(
+        (c) =>
+          c.property_id === Number(selectedPropertyId) &&
+          c.status === 'ACTIVO'
+      );
+    if (hasActiveContractOnProperty) {
+      setContractError(
+        `Operación bloqueada: El inmueble "[${targetProperty.code}] ${targetProperty.title}" ya cuenta con un contrato activo y está en estado [OCUPADO].`
       );
       setContractFeedback(null);
       return;
     }
 
     const agreedCop = Number(contractRentCop || 0);
+    if (agreedCop <= 0) {
+      setContractError(
+        'Operación bloqueada: El canon mensual pactado debe ser mayor a $0 COP.'
+      );
+      setContractFeedback(null);
+      return;
+    }
+
     const initialPaidCop = effectiveContractInitialPaymentCop;
     const maxAllowedInitialCop = isRetroactiveContract
       ? totalContractAgreedAcrossPeriodsCop
@@ -876,11 +1157,14 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       }
     }
 
+    if (!acquireFormLock(contractSubmitLockRef)) return;
+
+    const occupiedPropId = Number(selectedPropertyId);
     const createdContract = onCreateContract({
-      property_id: Number(selectedPropertyId),
+      property_id: occupiedPropId,
       tenant_name: tenantName.trim(),
       tenant_document: tenantDocument.trim(),
-      guarantor_name: guarantorName.trim() || 'Póliza Arrendamiento Seguro',
+      guarantor_name: guarantorName.trim(),
       phone: tenantPhone.trim() || '+57 310 000 0000',
       monthly_rent_cop: agreedCop,
       start_date: startDate,
@@ -902,7 +1186,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       for (const period of retroactivePeriods) {
         onRecordPayment({
           contract_id: contractId,
-          property_id: Number(selectedPropertyId),
+          property_id: occupiedPropId,
           period_month: period,
           gross_amount_cop: agreedCop,
           payment_date: `${period}-${paddedCutoffDay}`,
@@ -923,7 +1207,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
         const chunk = Math.min(agreedCop, remainingToDistribute);
         onRecordPayment({
           contract_id: contractId,
-          property_id: Number(selectedPropertyId),
+          property_id: occupiedPropId,
           period_month: period,
           gross_amount_cop: chunk,
           payment_date: `${period}-${paddedCutoffDay}`,
@@ -940,7 +1224,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
           : startDate || new Date().toISOString().slice(0, 10);
       onRecordPayment({
         contract_id: contractId,
-        property_id: Number(selectedPropertyId),
+        property_id: occupiedPropId,
         period_month: contractPaymentPeriod,
         gross_amount_cop: initialPaidCop,
         payment_date: targetPeriodDate,
@@ -954,7 +1238,7 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
       });
     }
 
-    setPaymentPropertyId(Number(selectedPropertyId));
+    setPaymentPropertyId(occupiedPropId);
     setPaymentPeriod(contractPaymentPeriod);
     setContractError(null);
 
@@ -968,10 +1252,24 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
     setContractFeedback(
       `Contrato activo creado para "${tenantName.trim()}" · ${modeBadge} registrado en ${contractPaymentPeriod} · Inmueble pasa a [OCUPADO].`
     );
+
+    const nextAvailableProp = rentableProperties.find(
+      (p) => p.id !== occupiedPropId && p.status === 'DISPONIBLE'
+    );
+    if (nextAvailableProp) {
+      setSelectedPropertyId(nextAvailableProp.id);
+      setContractRentCop(nextAvailableProp.base_rent_cop);
+      setContractInitialPaymentCop(nextAvailableProp.base_rent_cop);
+    }
+
     setTenantName('');
     setTenantDocument('');
     setGuarantorName('');
     setTenantPhone('');
+    setContractPaymentMode('COMPLETO');
+    setStartDate(`${currentSystemPeriod}-01`);
+    setContractPaymentPeriod(currentSystemPeriod);
+    setContractCutoffDay(5);
   };
 
   const activePaymentProperty =
@@ -1125,15 +1423,14 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
           <div>
             <div className="text-xs font-mono text-[#00eefc] uppercase tracking-widest">
-              MÓDULO 02 // ENTRADA TRANSACCIONAL DE DATOS Y JERARQUÍA DE ACTIVOS
+              MÓDULO 02 // GESTIÓN DE REGISTRO Y JERARQUÍA DE ACTIVOS
             </div>
             <h2 className="text-xl font-bold text-white mt-1">
               Registro y Control — Propietario Activo:{' '}
               {bundle.selected_owner.name}
             </h2>
             <p className="text-xs font-mono text-[#9ca3af] mt-0.5">
-              Selecciona la operación transaccional a ejecutar. Cada sub-vista
-              opera de forma independiente sobre el motor relacional.
+              Selecciona la operación a registrar en el sistema.
             </p>
           </div>
           <div className="text-xs font-mono text-[#9ca3af] border border-[#292a2e] bg-[#14151a] px-3 py-2">
@@ -1208,9 +1505,6 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
               <h3 className="text-sm font-mono font-bold uppercase tracking-wider text-[#00eefc]">
                 01 // Registro de Propietario
               </h3>
-              <span className="text-xs font-mono text-[#9ca3af]">
-                TABLA: owners
-              </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
@@ -1220,8 +1514,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                 </span>
                 <input
                   type="text"
+                  data-testid="input-owner-name"
                   value={ownerName}
-                  onChange={(e) => setOwnerName(e.target.value)}
+                  onChange={(e) => {
+                    setOwnerName(e.target.value);
+                    setOwnerError(null);
+                  }}
                   placeholder="Ej. Inversiones Sabana Real S.A.S"
                   className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                 />
@@ -1233,8 +1531,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                 </span>
                 <input
                   type="text"
+                  data-testid="input-owner-doc"
                   value={ownerDoc}
-                  onChange={(e) => setOwnerDoc(e.target.value)}
+                  onChange={(e) => {
+                    setOwnerDoc(e.target.value);
+                    setOwnerError(null);
+                  }}
                   placeholder="NIT 901.442.110-4"
                   className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                 />
@@ -1246,8 +1548,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                 </span>
                 <input
                   type="text"
+                  data-testid="input-owner-phone"
                   value={ownerPhone}
-                  onChange={(e) => setOwnerPhone(e.target.value)}
+                  onChange={(e) => {
+                    setOwnerPhone(e.target.value);
+                    setOwnerError(null);
+                  }}
                   placeholder="+57 310 555 0192"
                   className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                 />
@@ -1259,8 +1565,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                 </span>
                 <input
                   type="email"
+                  data-testid="input-owner-email"
                   value={ownerEmail}
-                  onChange={(e) => setOwnerEmail(e.target.value)}
+                  onChange={(e) => {
+                    setOwnerEmail(e.target.value);
+                    setOwnerError(null);
+                  }}
                   placeholder="tesoreria@sabana.co"
                   className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                 />
@@ -1300,17 +1610,30 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
               </div>
             </div>
 
+            {ownerError && (
+              <div
+                data-testid="owner-error-feedback"
+                className="p-2.5 bg-[#ff007f]/15 border border-[#ff007f] text-xs font-mono text-[#ff007f] font-bold"
+              >
+                {ownerError}
+              </div>
+            )}
+
             {ownerFeedback && (
-              <div className="p-2.5 bg-[#00FF66]/10 border border-[#00FF66]/40 text-xs font-mono text-[#00FF66]">
+              <div
+                data-testid="owner-success-feedback"
+                className="p-2.5 bg-[#00FF66]/10 border border-[#00FF66]/40 text-xs font-mono text-[#00FF66]"
+              >
                 {ownerFeedback}
               </div>
             )}
 
             <button
               type="submit"
+              data-testid="submit-owner-button"
               className="w-full py-2.5 bg-[#00eefc] text-[#0d0e12] font-mono font-bold text-xs uppercase tracking-wider hover:bg-[#00eefc]/90"
             >
-              [ GUARDAR PROPIETARIO EN SQLITE ]
+              [ GUARDAR PROPIETARIO ]
             </button>
           </form>
 
@@ -1325,6 +1648,15 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
               </span>
             </div>
 
+            {editOwnerFeedback && (
+              <div
+                data-testid="edit-owner-feedback"
+                className="p-2.5 bg-[#00FF66]/10 border border-[#00FF66]/40 text-xs font-mono text-[#00FF66]"
+              >
+                {editOwnerFeedback}
+              </div>
+            )}
+
             <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
               {bundle.all_owners.map((owner) => {
                 const isSelected = owner.id === bundle.selected_owner.id;
@@ -1337,19 +1669,46 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                         : 'bg-[#14151a] border-[#292a2e]'
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-white">{owner.name}</span>
-                      {isSelected && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-[#00eefc]/20 text-[#00eefc] border border-[#00eefc]/40">
-                          [PROPIETARIO ACTIVO]
-                        </span>
-                      )}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span
+                        className="font-bold text-white"
+                        data-testid={`owner-directory-name-${owner.id}`}
+                      >
+                        {owner.name}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {isSelected && (
+                          <span className="text-[10px] px-1.5 py-0.5 bg-[#00eefc]/20 text-[#00eefc] border border-[#00eefc]/40">
+                            [PROPIETARIO ACTIVO]
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          data-testid={`edit-owner-btn-${owner.id}`}
+                          onClick={() => handleStartEditOwner(owner)}
+                          className="px-2 py-0.5 bg-[#1a1b20] border border-[#ffb800]/60 text-[10px] text-[#ffb800] font-bold hover:bg-[#ffb800]/15 uppercase"
+                        >
+                          [ EDITAR PROPIETARIO ]
+                        </button>
+                      </div>
                     </div>
                     <div className="text-[#9ca3af] mt-1 grid grid-cols-1 sm:grid-cols-2 gap-1">
-                      <span>DOC: {owner.document_id}</span>
-                      <span>TEL: {owner.phone}</span>
-                      <span className="sm:col-span-2">EMAIL: {owner.email}</span>
-                      <span className="text-[#ffb800] font-bold sm:col-span-2">
+                      <span data-testid={`owner-directory-doc-${owner.id}`}>
+                        DOC: {owner.document_id}
+                      </span>
+                      <span data-testid={`owner-directory-phone-${owner.id}`}>
+                        TEL: {owner.phone}
+                      </span>
+                      <span
+                        className="sm:col-span-2"
+                        data-testid={`owner-directory-email-${owner.id}`}
+                      >
+                        EMAIL: {owner.email}
+                      </span>
+                      <span
+                        className="text-[#ffb800] font-bold sm:col-span-2"
+                        data-testid={`owner-directory-cutoff-${owner.id}`}
+                      >
                         FECHA DE CORTE / LIQUIDACIÓN: Día {owner.cutoff_day ?? 5}{' '}
                         de cada mes
                       </span>
@@ -1379,9 +1738,6 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
               <h3 className="text-sm font-mono font-bold uppercase tracking-wider text-[#00eefc]">
                 02 // Registro de Inmueble y Subdivisiones
               </h3>
-              <span className="text-xs font-mono text-[#9ca3af]">
-                TABLA: properties
-              </span>
             </div>
 
             {/* Modalidad de Activo Selector */}
@@ -1569,8 +1925,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   </span>
                   <input
                     type="text"
+                    data-testid="input-prop-code"
                     value={propCode}
-                    onChange={(e) => setPropCode(e.target.value)}
+                    onChange={(e) => {
+                      setPropCode(e.target.value);
+                      setPropError(null);
+                    }}
                     placeholder={
                       hasSubdivisions ? 'MAT-NORTE-01' : 'APT-FACA-201'
                     }
@@ -1584,8 +1944,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   </span>
                   <input
                     type="text"
+                    data-testid="input-prop-title"
                     value={propTitle}
-                    onChange={(e) => setPropTitle(e.target.value)}
+                    onChange={(e) => {
+                      setPropTitle(e.target.value);
+                      setPropError(null);
+                    }}
                     placeholder={
                       hasSubdivisions
                         ? 'Edificio Mirador del Parque'
@@ -1627,8 +1991,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   </span>
                   <input
                     type="text"
+                    data-testid="input-prop-address"
                     value={propAddress}
-                    onChange={(e) => setPropAddress(e.target.value)}
+                    onChange={(e) => {
+                      setPropAddress(e.target.value);
+                      setPropError(null);
+                    }}
                     placeholder="Cra 7 # 14-20, Facatativá"
                     className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                   />
@@ -2002,19 +2370,32 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
               )}
             </div>
 
+            {propError && (
+              <div
+                data-testid="property-error-feedback"
+                className="p-2.5 bg-[#ff007f]/15 border border-[#ff007f] text-xs font-mono text-[#ff007f] font-bold"
+              >
+                {propError}
+              </div>
+            )}
+
             {propFeedback && (
-              <div className="p-2.5 bg-[#00FF66]/10 border border-[#00FF66]/40 text-xs font-mono text-[#00FF66]">
+              <div
+                data-testid="property-success-feedback"
+                className="p-2.5 bg-[#00FF66]/10 border border-[#00FF66]/40 text-xs font-mono text-[#00FF66]"
+              >
                 {propFeedback}
               </div>
             )}
 
             <button
               type="submit"
+              data-testid="submit-property-button"
               className="w-full py-2.5 bg-[#00eefc] text-[#0d0e12] font-mono font-bold text-xs uppercase tracking-wider hover:bg-[#00eefc]/90"
             >
               {hasSubdivisions
-                ? `[ GUARDAR PROPIEDAD Y ${subdivisions.length} SUBDIVISIONES EN SQLITE ]`
-                : '[ GUARDAR PROPIEDAD ÚNICA EN SQLITE ]'}
+                ? `[ GUARDAR PROPIEDAD Y ${subdivisions.length} SUBDIVISIONES ]`
+                : '[ GUARDAR PROPIEDAD ÚNICA ]'}
             </button>
           </form>
 
@@ -2255,9 +2636,6 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
               <h3 className="text-sm font-mono font-bold uppercase tracking-wider text-[#00eefc]">
                 03 // Vinculación de Inquilino y Contrato de Arrendamiento
               </h3>
-              <span className="text-xs font-mono text-[#9ca3af]">
-                TABLA: tenant_contracts + rent_payments
-              </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
@@ -2290,7 +2668,10 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   type="text"
                   data-testid="input-tenant-name"
                   value={tenantName}
-                  onChange={(e) => setTenantName(e.target.value)}
+                  onChange={(e) => {
+                    setTenantName(e.target.value);
+                    setContractError(null);
+                  }}
                   placeholder="Ej. Carolina Gómez Restrepo"
                   className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                 />
@@ -2304,7 +2685,10 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   type="text"
                   data-testid="input-tenant-document"
                   value={tenantDocument}
-                  onChange={(e) => setTenantDocument(e.target.value)}
+                  onChange={(e) => {
+                    setTenantDocument(e.target.value);
+                    setContractError(null);
+                  }}
                   placeholder="CC 1.020.441.890"
                   className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                 />
@@ -2316,8 +2700,12 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                 </span>
                 <input
                   type="text"
+                  data-testid="input-guarantor-name"
                   value={guarantorName}
-                  onChange={(e) => setGuarantorName(e.target.value)}
+                  onChange={(e) => {
+                    setGuarantorName(e.target.value);
+                    setContractError(null);
+                  }}
                   placeholder="Seguros Bolívar Póliza #1104"
                   className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
                 />
@@ -2689,6 +3077,177 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* POPUP MODAL WINDOW: Edición de Datos de Propietario */}
+      {editingOwnerId !== null &&
+        (() => {
+          const targetEditOwner = bundle.all_owners.find(
+            (o) => o.id === editingOwnerId
+          );
+          if (!targetEditOwner) return null;
+
+          return (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Ventana Emergente de Edición de Propietario"
+              data-testid="edit-owner-modal"
+              className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+            >
+              <div
+                data-testid={`edit-owner-panel-${targetEditOwner.id}`}
+                className="bg-[#0d0e12] border-2 border-[#ffb800] w-full max-w-2xl p-6 space-y-5 shadow-2xl font-mono text-xs"
+              >
+                <div className="flex items-start justify-between border-b border-[#292a2e] pb-4 gap-4">
+                  <div>
+                    <div className="text-xs font-mono text-[#ffb800] uppercase tracking-widest font-bold">
+                      01 // EDICIÓN DE DATOS DEL PROPIETARIO
+                    </div>
+                    <h3 className="text-lg font-mono font-bold text-white mt-0.5">
+                      {targetEditOwner.name} ({targetEditOwner.document_id})
+                    </h3>
+                    <p className="text-xs font-mono text-[#9ca3af]">
+                      Modifica nombre o razón social, documento, teléfono,
+                      correo electrónico y fecha de corte mensual.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    data-testid="close-edit-owner-modal-btn"
+                    onClick={() => setEditingOwnerId(null)}
+                    className="px-3 py-1.5 bg-[#1a1b20] border border-[#ff007f]/60 text-[#ff007f] font-mono font-bold text-xs uppercase hover:bg-[#ff007f]/15"
+                  >
+                    [ CERRAR ✕ ]
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block sm:col-span-2">
+                    <span className="text-[#9ca3af] uppercase block mb-1">
+                      Nombre Completo o Razón Social
+                    </span>
+                    <input
+                      type="text"
+                      data-testid={`edit-owner-name-${targetEditOwner.id}`}
+                      value={editOwnerName}
+                      onChange={(e) => {
+                        setEditOwnerName(e.target.value);
+                        setEditOwnerError(null);
+                      }}
+                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-[#9ca3af] uppercase block mb-1">
+                      Documento (CC / NIT)
+                    </span>
+                    <input
+                      type="text"
+                      data-testid={`edit-owner-doc-${targetEditOwner.id}`}
+                      value={editOwnerDoc}
+                      onChange={(e) => {
+                        setEditOwnerDoc(e.target.value);
+                        setEditOwnerError(null);
+                      }}
+                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-[#9ca3af] uppercase block mb-1">
+                      Teléfono Móvil
+                    </span>
+                    <input
+                      type="text"
+                      data-testid={`edit-owner-phone-${targetEditOwner.id}`}
+                      value={editOwnerPhone}
+                      onChange={(e) => {
+                        setEditOwnerPhone(e.target.value);
+                        setEditOwnerError(null);
+                      }}
+                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <label className="block sm:col-span-2">
+                    <span className="text-[#9ca3af] uppercase block mb-1">
+                      Correo Electrónico
+                    </span>
+                    <input
+                      type="email"
+                      data-testid={`edit-owner-email-${targetEditOwner.id}`}
+                      value={editOwnerEmail}
+                      onChange={(e) => {
+                        setEditOwnerEmail(e.target.value);
+                        setEditOwnerError(null);
+                      }}
+                      className="w-full bg-[#1a1b20] border border-[#292a2e] px-3 py-2 text-white"
+                    />
+                  </label>
+
+                  <div className="block sm:col-span-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <label
+                        htmlFor={`edit-owner-cutoff-${targetEditOwner.id}`}
+                        className="text-[#9ca3af] uppercase"
+                      >
+                        Fecha de Corte / Liquidación
+                      </label>
+                      <span className="text-[#ffb800] font-bold">
+                        Día {editOwnerCutoffDay} de cada mes
+                      </span>
+                    </div>
+                    <select
+                      id={`edit-owner-cutoff-${targetEditOwner.id}`}
+                      data-testid={`edit-owner-cutoff-${targetEditOwner.id}`}
+                      value={editOwnerCutoffDay}
+                      onChange={(e) =>
+                        setEditOwnerCutoffDay(Number(e.target.value))
+                      }
+                      className="w-full bg-[#1a1b20] border border-[#ffb800]/60 px-3 py-2 text-white font-bold"
+                    >
+                      {Array.from({ length: 30 }, (_, idx) => idx + 1).map(
+                        (day) => (
+                          <option key={day} value={day}>
+                            Día {day} del mes (Entrega de cuentas)
+                          </option>
+                        )
+                      )}
+                    </select>
+                  </div>
+                </div>
+
+                {editOwnerError && (
+                  <div
+                    data-testid="edit-owner-error-feedback"
+                    className="p-2.5 bg-[#ff007f]/15 border border-[#ff007f] text-xs font-mono text-[#ff007f] font-bold"
+                  >
+                    {editOwnerError}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-[#292a2e]">
+                  <button
+                    type="button"
+                    onClick={() => setEditingOwnerId(null)}
+                    className="px-4 py-2.5 bg-[#14151a] border border-[#292a2e] text-xs text-[#9ca3af] hover:text-white uppercase font-bold"
+                  >
+                    [ CANCELAR ]
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={`save-edit-owner-btn-${targetEditOwner.id}`}
+                    onClick={() => handleSaveEditOwner(targetEditOwner)}
+                    className="px-5 py-2.5 bg-[#ffb800] text-[#0d0e12] text-xs font-bold uppercase tracking-wider hover:bg-[#ffb800]/90"
+                  >
+                    [ GUARDAR CAMBIOS DEL PROPIETARIO ]
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* POPUP MODAL WINDOW: Edición Completa de Matriz Principal / Inmueble y Subdivisiones */}
       {editingPropertyId !== null &&
@@ -3383,6 +3942,15 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                   )}
                 </div>
 
+                {editPropError && (
+                  <div
+                    data-testid="edit-property-error-feedback"
+                    className="p-2.5 bg-[#ff007f]/15 border border-[#ff007f] text-xs font-mono text-[#ff007f] font-bold"
+                  >
+                    {editPropError}
+                  </div>
+                )}
+
                 {/* Action Footer */}
                 <div className="flex flex-wrap items-center justify-end gap-3 pt-2 border-t border-[#292a2e]">
                   <button
@@ -3399,8 +3967,8 @@ export const RegistroControlView: React.FC<RegistroControlViewProps> = ({
                     className="px-5 py-2.5 bg-[#ffb800] text-[#0d0e12] text-xs font-bold uppercase tracking-wider hover:bg-[#ffb800]/90"
                   >
                     {editHasSubdivisions
-                      ? `[ GUARDAR CAMBIOS DE PROPIEDAD Y ${editSubdivisions.length} SUBDIVISIONES EN SQLITE ]`
-                      : '[ GUARDAR CAMBIOS DE PROPIEDAD ÚNICA EN SQLITE ]'}
+                      ? `[ GUARDAR CAMBIOS DE PROPIEDAD Y ${editSubdivisions.length} SUBDIVISIONES ]`
+                      : '[ GUARDAR CAMBIOS DE PROPIEDAD ÚNICA ]'}
                   </button>
                 </div>
               </div>

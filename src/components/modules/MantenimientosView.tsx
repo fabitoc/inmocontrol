@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   NewMaintenanceInput,
   OwnerDashboardBundle,
@@ -46,6 +46,8 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
   >('TODOS');
   const [propertyFilter, setPropertyFilter] = useState<string>('ALL');
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [errorFeedback, setErrorFeedback] = useState<string | null>(null);
+  const submitLockRef = useRef<boolean>(false);
 
   const propById = new Map(bundle.properties.map((p) => [p.id, p]));
 
@@ -67,7 +69,45 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!description.trim() || !invoiceNumber.trim()) return;
+    if (
+      !description.trim() ||
+      !technicianName.trim() ||
+      !invoiceNumber.trim() ||
+      !executionDate.trim() ||
+      (category === 'OTRA' && !customCategory.trim())
+    ) {
+      setErrorFeedback(
+        'Operación bloqueada: Debes completar todos los campos de la orden de mantenimiento antes de guardar.'
+      );
+      setFeedback(null);
+      return;
+    }
+
+    if (Number(netCostCop) <= 0) {
+      setErrorFeedback(
+        'Operación bloqueada: El costo neto del mantenimiento debe ser mayor a $0 COP.'
+      );
+      setFeedback(null);
+      return;
+    }
+
+    const normalizedInvoice = invoiceNumber.trim().toUpperCase();
+    const isDuplicateInvoice = bundle.maintenances.some(
+      (m) => m.invoice_number.trim().toUpperCase() === normalizedInvoice
+    );
+    if (isDuplicateInvoice) {
+      setErrorFeedback(
+        `Operación bloqueada: Ya existe una orden registrada con el número de factura "${normalizedInvoice}".`
+      );
+      setFeedback(null);
+      return;
+    }
+
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
+    setTimeout(() => {
+      submitLockRef.current = false;
+    }, 350);
 
     const normalizedReceipt = normalizeEvidencePath(receiptFileName);
     const normalizedEvidences = evidenceFileNames.map((f) =>
@@ -76,9 +116,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
 
     const resolvedCategory =
       category === 'OTRA'
-        ? customCategory.trim()
-          ? `OTRA: ${customCategory.trim().toUpperCase()}`
-          : 'OTRA'
+        ? `OTRA: ${customCategory.trim().toUpperCase()}`
         : category;
 
     onCreateMaintenance({
@@ -86,15 +124,16 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
       execution_date: executionDate,
       category: resolvedCategory,
       description: description.trim(),
-      technician_name: technicianName.trim() || 'Contratista Autorizado Agencia',
-      invoice_number: invoiceNumber.trim().toUpperCase(),
+      technician_name: technicianName.trim(),
+      invoice_number: normalizedInvoice,
       net_cost_cop: Number(netCostCop),
       receipt_image_path: normalizedReceipt,
       evidence_images_paths: normalizedEvidences,
     });
 
+    setErrorFeedback(null);
     setFeedback(
-      `Orden ${invoiceNumber.trim().toUpperCase()} guardada en estado [Por Liquidar] con deducción 1:1 (${formatCop(netCostCop)}) y soporte en %LocalAppData%\\InmoControl\\${normalizedReceipt}`
+      `Orden ${normalizedInvoice} guardada en estado [Por Liquidar] con deducción 1:1 (${formatCop(netCostCop)}).`
     );
     setDescription('');
     setTechnicianName('');
@@ -121,16 +160,13 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
       <div className="bg-[#0d0e12] border border-[#292a2e] p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <div className="text-xs font-mono text-[#00eefc] uppercase tracking-widest">
-            MÓDULO 03 // BITÁCORA TÉCNICA Y ALMACENAMIENTO LOCAL DE EVIDENCIAS
+            MÓDULO 03 // BITÁCORA TÉCNICA DE MANTENIMIENTOS
           </div>
           <h2 className="text-xl font-bold text-white mt-1">
             Mantenimientos y Soportes — {bundle.selected_owner.name}
           </h2>
           <p className="text-xs font-mono text-[#9ca3af] mt-0.5">
-            Ruta local de almacenamiento:{' '}
-            <code className="text-[#00eefc]">
-              %LocalAppData%\InmoControl\evidencias\
-            </code>
+            Control de órdenes técnicas, facturas y evidencias por inmueble
           </p>
         </div>
 
@@ -290,8 +326,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
                 htmlFor="receipt-upload"
                 className="text-[#9ca3af] uppercase block"
               >
-                Fotografía del Recibo / Factura (`receipt_image_path` - 1
-                Archivo)
+                Fotografía del Recibo / Factura (1 Archivo)
               </label>
               <input
                 id="receipt-upload"
@@ -301,8 +336,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
                 className="w-full text-xs text-[#9ca3af]"
               />
               <div className="text-[11px] text-[#00eefc] truncate">
-                Destino: %LocalAppData%\InmoControl\
-                {normalizeEvidencePath(receiptFileName)}
+                Archivo seleccionado: {receiptFileName}
               </div>
             </div>
 
@@ -312,8 +346,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
                 htmlFor="evidence-upload"
                 className="text-[#9ca3af] uppercase block"
               >
-                Imágenes de Evidencia del Trabajo (`evidence_images_paths` -
-                Múltiples)
+                Imágenes de Evidencia del Trabajo (Múltiples)
               </label>
               <input
                 id="evidence-upload"
@@ -324,14 +357,20 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
                 className="w-full text-xs text-[#9ca3af]"
               />
               <div className="text-[11px] text-[#00FF66]">
-                JSON Array ({evidenceFileNames.length} archivos): [
-                {evidenceFileNames
-                  .map((f) => `"${normalizeEvidencePath(f)}"`)
-                  .join(', ')}
-                ]
+                Archivos adjuntos ({evidenceFileNames.length}):{' '}
+                {evidenceFileNames.join(', ')}
               </div>
             </div>
           </div>
+
+          {errorFeedback && (
+            <div
+              className="p-2.5 bg-[#ff007f]/15 border border-[#ff007f] text-xs font-mono text-[#ff007f] font-bold"
+              data-testid="maintenance-error-feedback"
+            >
+              {errorFeedback}
+            </div>
+          )}
 
           {feedback && (
             <div
@@ -346,7 +385,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
             type="submit"
             className="w-full py-2.5 bg-[#ffb800] text-[#0d0e12] font-mono font-bold text-xs uppercase tracking-wider hover:bg-[#ffb800]/90"
           >
-            [ REGISTRAR ORDEN Y COPIAR EVIDENCIAS LOCALES ]
+            [ REGISTRAR ORDEN Y GUARDAR EVIDENCIAS ]
           </button>
         </form>
 
@@ -410,7 +449,7 @@ export const MantenimientosView: React.FC<MantenimientosViewProps> = ({
                       INMUEBLE / NOVEDAD
                     </th>
                     <th scope="col" className="py-2.5 px-3">
-                      SOPORTES LOCALES (`evidencias\`)
+                      SOPORTES ADJUNTOS
                     </th>
                     <th scope="col" className="py-2.5 px-3 text-right">
                       COSTO NETO (1:1)

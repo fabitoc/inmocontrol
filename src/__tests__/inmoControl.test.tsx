@@ -275,10 +275,20 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
       '50%'
     );
 
-    // Submit the new property with 2 subdivisions and verify expand/collapse on the newly created parent (id 10)
+    // Fill required property fields and submit the new property with 2 subdivisions
+    fireEvent.change(screen.getByTestId('input-prop-code'), {
+      target: { value: 'MAT-NORTE-09' },
+    });
+    fireEvent.change(screen.getByTestId('input-prop-title'), {
+      target: { value: 'Edificio Matriz Norte 09' },
+    });
+    fireEvent.change(screen.getByTestId('input-prop-address'), {
+      target: { value: 'Cra 15 # 80-10' },
+    });
+
     fireEvent.click(
       screen.getByRole('button', {
-        name: /GUARDAR PROPIEDAD Y 2 SUBDIVISIONES EN SQLITE/i,
+        name: /GUARDAR PROPIEDAD Y 2 SUBDIVISIONES/i,
       })
     );
 
@@ -328,7 +338,7 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     // Click transactional [ APROBAR // EJECUTAR ]
     fireEvent.click(screen.getByTestId('approve-settlement-button'));
     expect(screen.getByTestId('settlement-feedback')).toHaveTextContent(
-      /BEGIN TRANSACTION \.\.\. COMMIT completado/i
+      /Liquidación .* sellada para/i
     );
 
     // After settlement, pending maintenance deduction drops to $0
@@ -709,6 +719,9 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     });
     fireEvent.change(screen.getByTestId('input-tenant-document'), {
       target: { value: 'CC 1.090.331.220' },
+    });
+    fireEvent.change(screen.getByTestId('input-guarantor-name'), {
+      target: { value: 'Seguros Bolívar Póliza #1104' },
     });
 
     fireEvent.click(screen.getByTestId('submit-contract-button'));
@@ -1145,6 +1158,9 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     fireEvent.change(screen.getByTestId('input-tenant-document'), {
       target: { value: 'CC 80.112.490' },
     });
+    fireEvent.change(screen.getByTestId('input-guarantor-name'), {
+      target: { value: 'Fianza Crédito Mercantil #882' },
+    });
     fireEvent.click(screen.getByTestId('submit-contract-button'));
 
     expect(screen.getByTestId('contract-success-feedback')).toHaveTextContent(
@@ -1185,5 +1201,180 @@ describe('InmoControl 2.0 Core Domain & 5-Module HUD Suite', () => {
     );
     expect(prop3CurrentLine).toBeDefined();
     expect(prop3CurrentLine?.grossCollectedCop).toBe(2_900_000);
+  });
+
+  it('blocks incomplete registrations, resets fields and prevents duplicate records on double-click in Registro y Control, and removes technical telemetry descriptions from UI', () => {
+    render(<App />);
+
+    // 1. Verify technical descriptions are completely removed from UI
+    expect(
+      screen.queryByText(/Arquitectura Local-First \(Tauri \+ SQLite\)/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Soporte en %LocalAppData%\\InmoControl\\evidencias\\/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/FILTRO MAESTRO REACTIVO/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/ESTADO GLOBAL SINCRONIZADO/i)
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('nav-registro-control'));
+    expect(screen.queryByText(/TABLA: owners/i)).not.toBeInTheDocument();
+
+    // 2. Tab 01 (Propietario): block incomplete registration, then register once and prevent duplicates on double-click
+    const initialOwnersCount =
+      inmoRepository.getOwnerDashboardBundle(1).all_owners.length;
+    fireEvent.change(screen.getByTestId('input-owner-name'), {
+      target: { value: 'Inversiones Norte S.A.S' },
+    });
+    // Missing document, phone, email -> blocked
+    fireEvent.click(screen.getByTestId('submit-owner-button'));
+    expect(screen.getByTestId('owner-error-feedback')).toHaveTextContent(
+      /Debes completar todos los campos del propietario/i
+    );
+    expect(inmoRepository.getOwnerDashboardBundle(1).all_owners).toHaveLength(
+      initialOwnersCount
+    );
+
+    // Complete all owner fields and double-click submit -> only 1 owner created and fields reset
+    fireEvent.change(screen.getByTestId('input-owner-doc'), {
+      target: { value: 'NIT 901.999.888-1' },
+    });
+    fireEvent.change(screen.getByTestId('input-owner-phone'), {
+      target: { value: '+57 315 888 9900' },
+    });
+    fireEvent.change(screen.getByTestId('input-owner-email'), {
+      target: { value: 'gerencia@inversionesnorte.co' },
+    });
+
+    const ownerSubmitBtn = screen.getByTestId('submit-owner-button');
+    fireEvent.click(ownerSubmitBtn);
+    fireEvent.click(ownerSubmitBtn);
+
+    expect(inmoRepository.getOwnerDashboardBundle(1).all_owners).toHaveLength(
+      initialOwnersCount + 1
+    );
+    expect(screen.getByTestId('input-owner-name')).toHaveValue('');
+    expect(screen.getByTestId('input-owner-doc')).toHaveValue('');
+    expect(screen.getByTestId('input-owner-phone')).toHaveValue('');
+    expect(screen.getByTestId('input-owner-email')).toHaveValue('');
+
+    // 3. Tab 02 (Inmueble): block incomplete registration, then register once and prevent duplicates on double-click
+    fireEvent.click(screen.getByTestId('tab-inmueble'));
+    const initialPropsCount = inmoRepository.getAllProperties().length;
+
+    // Empty code/title/address -> blocked (no auto-generated fallback allowed)
+    fireEvent.click(screen.getByTestId('submit-property-button'));
+    expect(screen.getByTestId('property-error-feedback')).toHaveTextContent(
+      /Debes completar el código principal, título y dirección física/i
+    );
+    expect(inmoRepository.getAllProperties()).toHaveLength(initialPropsCount);
+
+    // Fill complete property fields and double-click submit -> only 1 property created and fields reset
+    fireEvent.change(screen.getByTestId('input-prop-code'), {
+      target: { value: 'APT-NORTE-501' },
+    });
+    fireEvent.change(screen.getByTestId('input-prop-title'), {
+      target: { value: 'Apartamento 501 Mirador' },
+    });
+    fireEvent.change(screen.getByTestId('input-prop-address'), {
+      target: { value: 'Calle 12 # 9-45' },
+    });
+
+    const propSubmitBtn = screen.getByTestId('submit-property-button');
+    fireEvent.click(propSubmitBtn);
+    fireEvent.click(propSubmitBtn);
+
+    expect(inmoRepository.getAllProperties()).toHaveLength(
+      initialPropsCount + 1
+    );
+    expect(screen.getByTestId('input-prop-code')).toHaveValue('');
+    expect(screen.getByTestId('input-prop-title')).toHaveValue('');
+    expect(screen.getByTestId('input-prop-address')).toHaveValue('');
+
+    // 4. Tab 03 (Inquilino): block incomplete registration (missing guarantor) and prevent duplicate contract on double-click
+    fireEvent.click(screen.getByTestId('tab-inquilino'));
+    const currentOwnerId =
+      inmoRepository.getOwnerDashboardBundle(1).all_owners.slice(-1)[0].id;
+    const initialContractsCount =
+      inmoRepository.getOwnerDashboardBundle(currentOwnerId).contracts.length;
+
+    fireEvent.change(screen.getByTestId('input-tenant-name'), {
+      target: { value: 'Camilo Restrepo' },
+    });
+    fireEvent.change(screen.getByTestId('input-tenant-document'), {
+      target: { value: 'CC 79.445.112' },
+    });
+    // Missing guarantor -> blocked
+    fireEvent.click(screen.getByTestId('submit-contract-button'));
+    expect(screen.getByTestId('contract-error-feedback')).toHaveTextContent(
+      /Debes completar todos los campos del inquilino/i
+    );
+    expect(
+      inmoRepository.getOwnerDashboardBundle(currentOwnerId).contracts
+    ).toHaveLength(initialContractsCount);
+
+    // Fill guarantor and double-click submit -> only 1 contract created and fields reset
+    fireEvent.change(screen.getByTestId('input-guarantor-name'), {
+      target: { value: 'Seguros Sura Póliza #4490' },
+    });
+    const contractSubmitBtn = screen.getByTestId('submit-contract-button');
+    fireEvent.click(contractSubmitBtn);
+    fireEvent.click(contractSubmitBtn);
+
+    expect(
+      inmoRepository.getOwnerDashboardBundle(currentOwnerId).contracts
+    ).toHaveLength(initialContractsCount + 1);
+    expect(screen.getByTestId('input-tenant-name')).toHaveValue('');
+    expect(screen.getByTestId('input-tenant-document')).toHaveValue('');
+    expect(screen.getByTestId('input-guarantor-name')).toHaveValue('');
+
+    // 5. Return to Tab 01 (Propietario) and edit existing owner data via [ EDITAR PROPIETARIO ] modal
+    fireEvent.click(screen.getByTestId('tab-propietario'));
+    fireEvent.click(screen.getByTestId('edit-owner-btn-1'));
+    expect(screen.getByTestId('edit-owner-modal')).toBeInTheDocument();
+
+    // Clearing name -> blocked
+    fireEvent.change(screen.getByTestId('edit-owner-name-1'), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByTestId('save-edit-owner-btn-1'));
+    expect(screen.getByTestId('edit-owner-error-feedback')).toHaveTextContent(
+      /Todos los campos del propietario .* son obligatorios/i
+    );
+
+    // Fill valid updated owner fields and save
+    fireEvent.change(screen.getByTestId('edit-owner-name-1'), {
+      target: { value: 'Fabián Vargas Correa Actualizado' },
+    });
+    fireEvent.change(screen.getByTestId('edit-owner-phone-1'), {
+      target: { value: '+57 320 777 8899' },
+    });
+    fireEvent.change(screen.getByTestId('edit-owner-email-1'), {
+      target: { value: 'fabian.actualizado@inmocontrol.co' },
+    });
+    fireEvent.change(screen.getByTestId('edit-owner-cutoff-1'), {
+      target: { value: '12' },
+    });
+    fireEvent.click(screen.getByTestId('save-edit-owner-btn-1'));
+
+    expect(screen.queryByTestId('edit-owner-modal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('edit-owner-feedback')).toHaveTextContent(
+      /Fabián Vargas Correa Actualizado.*Día 12/i
+    );
+    expect(screen.getByTestId('owner-directory-name-1')).toHaveTextContent(
+      'Fabián Vargas Correa Actualizado'
+    );
+    expect(screen.getByTestId('owner-directory-phone-1')).toHaveTextContent(
+      '+57 320 777 8899'
+    );
+    expect(screen.getByTestId('owner-directory-email-1')).toHaveTextContent(
+      'fabian.actualizado@inmocontrol.co'
+    );
+    expect(screen.getByTestId('owner-directory-cutoff-1')).toHaveTextContent(
+      'Día 12 de cada mes'
+    );
   });
 });

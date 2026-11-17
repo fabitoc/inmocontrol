@@ -268,8 +268,8 @@ export const AdministracionAlertasView: React.FC<
     setHandoverPaymentDesc('');
     setHandoverFeedback(
       note
-        ? `BEGIN TRANSACTION ... COMMIT ejecutado: Contrato finalizado, activo "${targetProp.title}" liberado a estado [DISPONIBLE] y registrada nota en Liquidaciones: ${note.note_text}`
-        : `BEGIN TRANSACTION ... COMMIT ejecutado: Contrato finalizado y activo "${targetProp.title}" liberado a estado [DISPONIBLE] (Inquilino a paz y salvo).`
+        ? `Restitución completada: Contrato finalizado, activo "${targetProp.title}" liberado a estado [DISPONIBLE] y registrada nota en Liquidaciones: ${note.note_text}`
+        : `Restitución completada: Contrato finalizado y activo "${targetProp.title}" liberado a estado [DISPONIBLE] (Inquilino a paz y salvo).`
     );
   };
 
@@ -573,23 +573,17 @@ export const AdministracionAlertasView: React.FC<
           <div className="flex items-center justify-between border-b border-[#ff0055]/40 pb-2.5">
             <div>
               <span className="text-[11px] font-mono text-[#ff0055] uppercase tracking-widest block font-bold">
-                ZONA DE EJECUCIÓN TRANSACCIONAL // RESTITUCIÓN DE ACTIVO
+                RESTITUCIÓN DE ACTIVO
               </span>
               <h3 className="text-sm font-mono font-bold uppercase text-white">
                 Terminación de Contrato y Entrega de Inmueble
               </h3>
             </div>
-            <span className="text-xs font-mono text-[#ff0055] border border-[#ff0055] px-2 py-0.5">
-              ACID TX
-            </span>
           </div>
 
           <p className="text-xs font-mono text-[#9ca3af]">
-            Al ejecutar este protocolo, el motor SQLite inicia un bloque{' '}
-            <code className="text-[#00eefc]">
-              BEGIN TRANSACTION ... COMMIT
-            </code>{' '}
-            que finaliza el contrato vigente y restituye el inmueble a estado{' '}
+            Al confirmar la entrega, se finaliza el contrato vigente y se
+            restituye el inmueble a estado{' '}
             <strong className="text-[#00FF66]">[DISPONIBLE]</strong> para nuevo
             arrendamiento.
           </p>

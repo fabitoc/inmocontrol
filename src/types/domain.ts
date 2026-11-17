@@ -29,6 +29,15 @@ export interface NewOwnerInput {
   cutoff_day?: number;
 }
 
+export interface UpdateOwnerInput {
+  id: number;
+  name: string;
+  document_id: string;
+  phone: string;
+  email: string;
+  cutoff_day: number;
+}
+
 export type PropertyStatus = 'DISPONIBLE' | 'OCUPADO';
 
 export interface PropertyCoOwner {

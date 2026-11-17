@@ -124,7 +124,7 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
     }
     onExecuteSettlement(bundle.selected_owner.id, periodMonth);
     setSettlementFeedback(
-      `BEGIN TRANSACTION ... COMMIT completado: Liquidación ${periodMonth} sellada para ${bundle.selected_owner.name} por ${formatCop(preview.netPayableCop)}. Mantenimientos actualizados a [Liquidado] y registrada en Historial. Los movimientos posteriores pasan automáticamente al corte ${nextCutoffPeriod}.`
+      `Liquidación ${periodMonth} sellada para ${bundle.selected_owner.name} por ${formatCop(preview.netPayableCop)}. Mantenimientos actualizados a [Liquidado] y registrada en Historial. Los movimientos posteriores pasan automáticamente al corte ${nextCutoffPeriod}.`
     );
   };
 
@@ -895,7 +895,7 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                       Soporte Visual de Facturas por Descontar
                     </h3>
                     <p className="text-xs font-mono text-[#9ca3af]">
-                      Verificación local en `%LocalAppData%\InmoControl\evidencias\`
+                      Facturas y recibos pendientes de descuento en el periodo
                     </p>
                   </div>
                   <span className="text-xs font-mono text-[#ffb800]">
@@ -963,13 +963,13 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
 
               <div className="bg-[#121317] border border-[#292a2e] p-3 font-mono text-xs space-y-1">
                 <div className="text-[#9ca3af] uppercase">
-                  VISOR DE SOPORTE LOCAL SELECCIONADO:
+                  SOPORTE SELECCIONADO:
                 </div>
                 <div
                   className="text-[#00eefc] font-bold truncate"
                   data-testid="active-receipt-preview-path"
                 >
-                  %LocalAppData%\InmoControl\{activeReceiptPath}
+                  {activeReceiptPath}
                 </div>
                 <div className="text-[11px] text-[#9ca3af]">
                   Deducción 1:1 verificada sin recargo operativo de agencia.
@@ -1266,7 +1266,7 @@ export const LiquidacionesView: React.FC<LiquidacionesViewProps> = ({
                     </h3>
                   </div>
                   <span className="text-xs font-mono text-[#00FF66] border border-[#00FF66]/40 px-2 py-0.5">
-                    SQLITE ACID
+                    CIERRE MENSUAL
                   </span>
                 </div>
 

@@ -14,6 +14,7 @@ import {
   Settlement,
   SmartAlert,
   TenantContract,
+  UpdateOwnerInput,
   UpdatePropertyInput,
   WeeklyTelemetryPoint,
 } from '../types/domain';
@@ -2432,6 +2433,38 @@ class InmoRepositoryImpl {
       created_at: new Date().toISOString(),
     };
     this.state.owners.push(owner);
+    this.persistState();
+    return owner;
+  }
+
+  public updateOwner(input: UpdateOwnerInput): Owner {
+    const owner = this.state.owners.find((o) => o.id === Number(input.id));
+    if (!owner) {
+      throw new Error(`No existe el propietario con ID #${input.id}`);
+    }
+    if (input.name.trim()) {
+      owner.name = input.name.trim();
+    }
+    if (input.document_id.trim()) {
+      owner.document_id = input.document_id.trim();
+    }
+    if (input.phone.trim()) {
+      owner.phone = input.phone.trim();
+    }
+    if (input.email.trim()) {
+      owner.email = input.email.trim();
+    }
+    if (input.cutoff_day !== undefined && Number(input.cutoff_day) >= 1) {
+      const nextCutoff = Math.min(30, Math.max(1, Number(input.cutoff_day)));
+      owner.cutoff_day = nextCutoff;
+      const currentEffectivePeriod = getCurrentPeriodMonth();
+      for (const prop of this.state.properties) {
+        if (prop.owner_id === owner.id && prop.cutoff_day !== nextCutoff) {
+          preservePreEditPropertySnapshot(prop, currentEffectivePeriod);
+          prop.cutoff_day = nextCutoff;
+        }
+      }
+    }
     this.persistState();
     return owner;
   }

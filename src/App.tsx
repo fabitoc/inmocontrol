@@ -7,6 +7,7 @@ import {
   NewOwnerInput,
   NewPropertyInput,
   NewRentPaymentInput,
+  UpdateOwnerInput,
   UpdatePropertyInput,
 } from './types/domain';
 import { inmoRepository } from './services/inmoService';
@@ -65,6 +66,12 @@ export const App: React.FC = () => {
     bumpRevision();
   };
 
+  const handleUpdateOwner = (input: UpdateOwnerInput) => {
+    const updated = inmoRepository.updateOwner(input);
+    bumpRevision();
+    return updated;
+  };
+
   const handleCreateProperty = (input: NewPropertyInput) => {
     const created = inmoRepository.createProperty(input);
     setSelectedOwnerId(created.owner_id);
@@ -115,28 +122,24 @@ export const App: React.FC = () => {
 
   return (
     <div className="h-screen overflow-hidden bg-[#121317] text-[#e3e2e7] flex flex-col scanline-overlay">
-      {/* Top Desktop OS Telemetry Bar */}
+      {/* Top Desktop Header Bar */}
       <div className="shrink-0 bg-[#0d0e12] border-b border-[#292a2e] px-4 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#9ca3af]">
         <div className="flex items-center gap-3">
           <span className="text-[#00eefc] font-bold">
-            INMOCONTROL 2.0 // DESKTOP ERP
+            INMOCONTROL 2.0 // GESTIÓN INMOBILIARIA
           </span>
-          <span>|</span>
-          <span>DB: %LocalAppData%\InmoControl\data\inmo_database.db</span>
-          <span>|</span>
-          <span className="text-[#00FF66]">PRAGMA journal_mode = WAL</span>
         </div>
 
         <div className="flex items-center gap-3">
           <span title={lastBackupPath}>
-            VACUUM INTO (30D ROTATION): ACTIVO
+            RESPALDO AUTOMÁTICO (30D): ACTIVO
           </span>
           <button
             type="button"
             onClick={handleManualBackup}
             className="px-2 py-0.5 bg-[#1a1b20] border border-[#00eefc]/40 text-[#00eefc] hover:bg-[#00eefc]/10"
           >
-            [ EJECUTAR BACKUP VACUUM INTO ]
+            [ CREAR COPIA DE SEGURIDAD ]
           </button>
         </div>
       </div>
@@ -151,13 +154,13 @@ export const App: React.FC = () => {
           <div className="space-y-4">
             <div className="border-b border-[#292a2e] pb-3">
               <div className="text-xs font-mono text-[#00eefc] uppercase tracking-widest">
-                OBSIDIAN TELEMETRY HUD
+                PANEL DE CONTROL
               </div>
               <h1 className="text-lg font-bold tracking-tight text-white">
                 InmoControl 2.0
               </h1>
               <p className="text-xs font-mono text-[#9ca3af]">
-                Arquitectura Local-First (Tauri + SQLite)
+                Administración de Arrendamientos y Cartera
               </p>
             </div>
 
@@ -186,14 +189,6 @@ export const App: React.FC = () => {
               })}
             </nav>
           </div>
-
-          <div className="hidden lg:block border-t border-[#292a2e] pt-3 space-y-1 font-mono text-[11px] text-[#9ca3af]">
-            <div>EVIDENCIAS LOCALES:</div>
-            <div className="text-[#00eefc] truncate">
-              %LocalAppData%\InmoControl\evidencias\
-            </div>
-            <div>LATENCIA FILTRO: {bundle.query_time_ms.toFixed(2)}ms</div>
-          </div>
         </aside>
 
         {/* Right Workspace: Global Master Owner Selector Header + Active View */}
@@ -201,9 +196,6 @@ export const App: React.FC = () => {
           {/* Header with Global Master Owner Selector */}
           <header className="shrink-0 bg-[#0d0e12] border-b border-[#292a2e] px-6 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <span className="text-[11px] font-mono text-[#9ca3af] uppercase tracking-widest block">
-                FILTRO MAESTRO REACTIVO (&lt;300ms) // ESTADO GLOBAL SINCRONIZADO
-              </span>
               <div className="text-sm font-mono text-white">
                 Propietario en Foco:{' '}
                 <strong className="text-[#00eefc]">
@@ -254,6 +246,7 @@ export const App: React.FC = () => {
               <RegistroControlView
                 bundle={bundle}
                 onCreateOwner={handleCreateOwner}
+                onUpdateOwner={handleUpdateOwner}
                 onCreateProperty={handleCreateProperty}
                 onUpdateProperty={handleUpdateProperty}
                 onCreateContract={handleCreateContract}
